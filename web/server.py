@@ -19,6 +19,8 @@ XRAY_API_ADDR=os.environ.get('XRAY_API_ADDR','127.0.0.1:10085')
 PANEL_VERSION='v26'
 DNS_LISTEN_HOST=os.environ.get('VPNSTAN_DNS_LISTEN_HOST','127.0.0.1')
 DNS_LISTEN_PORT=int(os.environ.get('VPNSTAN_DNS_LISTEN_PORT','5353'))
+DNS_TCP_PORT=int(os.environ.get('VPNSTAN_DNS_TCP_PORT','5354'))
+DNS_TCP_ENABLED=os.environ.get('VPNSTAN_DNS_TCP_ENABLED','1').lower() in ('1','true','yes','on')
 SESSIONS={}
 XRAY_PROC=None
 SESSION_USERS={}
@@ -70,6 +72,47 @@ def resolve_dns_wire(query):
         return data
     finally:
         sock.close()
+
+def dns_tcp_client(conn, addr):
+    conn.settimeout(8)
+    try:
+        while True:
+            hdr=conn.recv(2)
+            if not hdr:
+                return
+            if len(hdr)!=2:
+                return
+            n=int.from_bytes(hdr,'big')
+            if n<12 or n>65535:
+                return
+            q=b''
+            while len(q)<n:
+                chunk=conn.recv(min(4096,n-len(q)))
+                if not chunk:
+                    return
+                q+=chunk
+            answer=resolve_dns_wire(q)
+            conn.sendall(len(answer).to_bytes(2,'big')+answer)
+    except Exception:
+        return
+    finally:
+        try: conn.close()
+        except Exception: pass
+
+def dns_tcp_server():
+    if not DNS_TCP_ENABLED:
+        return
+    srv=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+    srv.bind(('0.0.0.0',DNS_TCP_PORT))
+    srv.listen(64)
+    print(f'VPNSTAN DNS TCP listening on 0.0.0.0:{DNS_TCP_PORT}',flush=True)
+    while True:
+        try:
+            conn,addr=srv.accept()
+            threading.Thread(target=dns_tcp_client,args=(conn,addr),daemon=True).start()
+        except Exception as e:
+            print('DNS TCP:',e,flush=True)
 
 def db():
     c=sqlite3.connect(DB); c.row_factory=sqlite3.Row; return c
@@ -522,6 +565,11 @@ class H(BaseHTTPRequestHandler):
             try: pid=int(p.split('/')[4])
             except: return send(self,400,{'success':False,'msg':'شناسه نامعتبر'})
             c=db(); users=c.execute('SELECT id FROM panel_users WHERE panel_id=?',(pid,)).fetchall(); c.execute('DELETE FROM panel_users WHERE panel_id=?',(pid,)); c.execute('DELETE FROM child_panels WHERE id=?',(pid,)); c.commit(); c.close(); return send(self,200,{'success':True,'deletedUsers':len(users)})
+        if p=='/api/dns-info':
+            if not authed(self): return send(self,401,{'success':False,'msg':'نیاز به ورود دارید'})
+            domain=os.environ.get('RAILWAY_TCP_PROXY_DOMAIN','').strip()
+            port=os.environ.get('RAILWAY_TCP_PROXY_PORT','').strip()
+            return send(self,200,{'success':True,'enabled':DNS_TCP_ENABLED,'internalPort':DNS_TCP_PORT,'tcpHost':domain,'tcpPort':port,'ready':bool(domain and port),'message':'برای DNSChanger باید TCP Proxy ریلیوی را روی پورت داخلی 5354 فعال کنید. سپس Host و Port نمایش داده می‌شود.'})
         if p=='/api/settings':
             if not authed(self): return send(self,401,{'success':False,'msg':'نیاز به ورود دارید'})
             if not has_permission(self,'settings_view'): return send(self,403,{'success':False,'msg':'دسترسی تنظیمات برای این پنل فعال نیست'})
@@ -631,6 +679,11 @@ class H(BaseHTTPRequestHandler):
             except:return send(self,400,{'success':False,'msg':'شناسه نامعتبر'})
             if current_user(self)['id']==uid:return send(self,400,{'success':False,'msg':'اکانت فعلی را نمی‌توان حذف کرد'})
             c=db(); c.execute('DELETE FROM panel_users WHERE id=?',(uid,)); c.commit(); c.close(); return send(self,200,{'success':True})
+        if p=='/api/dns-info':
+            if not authed(self): return send(self,401,{'success':False,'msg':'نیاز به ورود دارید'})
+            domain=os.environ.get('RAILWAY_TCP_PROXY_DOMAIN','').strip()
+            port=os.environ.get('RAILWAY_TCP_PROXY_PORT','').strip()
+            return send(self,200,{'success':True,'enabled':DNS_TCP_ENABLED,'internalPort':DNS_TCP_PORT,'tcpHost':domain,'tcpPort':port,'ready':bool(domain and port),'message':'برای DNSChanger باید TCP Proxy ریلیوی را روی پورت داخلی 5354 فعال کنید. سپس Host و Port نمایش داده می‌شود.'})
         if p=='/api/settings':
             if not has_permission(self,'settings_view'): return send(self,403,{'success':False,'msg':'دسترسی تنظیمات برای این پنل فعال نیست'})
             try:d=body(self); allowed={'node_host','node_port','ws_path','vmess_path','xhttp_path','grpc_service','grpc_path','httpupgrade_path','vmess_xhttp_path','vmess_grpc_path','vmess_httpupgrade_path','trojan_ws_path','trojan_xhttp_path','trojan_grpc_path','trojan_httpupgrade_path','sub_path','panel_title','support_url','announce','update_interval','wg_endpoint','wg_server_public_key','dns_server','dns_profile','theme'}
@@ -702,4 +755,4 @@ class H(BaseHTTPRequestHandler):
         raw=open(f,'rb').read(); self.send_response(200); self.send_header('Content-Type',mime); self.send_header('Content-Length',str(len(raw))); self.send_header('Cache-Control','no-store, no-cache, must-revalidate'); self.send_header('Pragma','no-cache'); self.end_headers(); self.wfile.write(raw)
 
 if __name__=='__main__':
-    init_db(); restart_xray(); threading.Thread(target=collector_loop,daemon=True).start(); print(f'vpnstan panel listening on 127.0.0.1:{PANEL_PORT}',flush=True); ThreadingHTTPServer(('127.0.0.1',PANEL_PORT),H).serve_forever()
+    init_db(); restart_xray(); threading.Thread(target=collector_loop,daemon=True).start(); threading.Thread(target=dns_tcp_server,daemon=True).start(); print(f'vpnstan panel listening on 127.0.0.1:{PANEL_PORT}',flush=True); ThreadingHTTPServer(('127.0.0.1',PANEL_PORT),H).serve_forever()
