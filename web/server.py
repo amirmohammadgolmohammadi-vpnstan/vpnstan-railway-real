@@ -412,8 +412,8 @@ def load_sub(h,sid):
     return s,rows
 
 def sub_page(h,sid):
-    with XRAY_LOCK:
-        collect_xray_stats()
+    # Xray stats are collected by the /sub request handler before this page is rendered.
+    # Do not acquire XRAY_LOCK again here: the caller may already hold it.
     s,rows=load_sub(h,sid)
     if not rows:
         h.send_response(404); h.send_header('Content-Type','text/html; charset=utf-8'); h.end_headers(); h.wfile.write('<h2>اشتراک پیدا نشد یا منقضی شده است.</h2>'.encode()); return
