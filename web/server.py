@@ -922,14 +922,34 @@ def tg_handle_callback(cb):
             f'+10 GB: <b>{tg_money(st.get("telegram_add_10_price",50000))}</b> تومان\n'
             f'+25 GB: <b>{tg_money(st.get("telegram_add_25_price",100000))}</b> تومان\n\n'
             'برای تغییر: /setrenewprices 30000 100000 250000\n<code>/setvolprices 30000 50000 100000</code>')
-        kb=[[{'text':'تمدید ۷ روز','callback_data':'admin_setprice:telegram_renew_7_price:30000'},{'text':'تمدید ۳۰ روز','callback_data':'admin_setprice:telegram_renew_30_price:100000'}],[{'text':'تمدید ۹۰ روز','callback_data':'admin_setprice:telegram_renew_90_price:250000'}],[{'text':'+۵ GB','callback_data':'admin_setprice:telegram_add_5_price:30000'},{'text':'+۱۰ GB','callback_data':'admin_setprice:telegram_add_10_price:50000'},{'text':'+۲۵ GB','callback_data':'admin_setprice:telegram_add_25_price:100000'}],[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]
-        tg_answer(cb.get('id','')); tg_edit(chat_id,mid,text+'\n\nبرای تغییر، روی گزینه موردنظر بزن؛ قیمت پیش‌فرض همان گزینه اعمال می‌شود. برای قیمت دلخواه از دستورهای قبلی استفاده کن.',kb); return
-    if data.startswith('admin_setprice:'):
+        kb=[[{'text':'🔄 قیمت تمدید ۷ روز','callback_data':'admin_price_wizard:telegram_renew_7_price:تمدید ۷ روز'},{'text':'🔄 قیمت تمدید ۳۰ روز','callback_data':'admin_price_wizard:telegram_renew_30_price:تمدید ۳۰ روز'}],[{'text':'🔄 قیمت تمدید ۹۰ روز','callback_data':'admin_price_wizard:telegram_renew_90_price:تمدید ۹۰ روز'}],[{'text':'➕ قیمت +۵ GB','callback_data':'admin_price_wizard:telegram_add_5_price:+۵ GB'},{'text':'➕ قیمت +۱۰ GB','callback_data':'admin_price_wizard:telegram_add_10_price:+۱۰ GB'},{'text':'➕ قیمت +۲۵ GB','callback_data':'admin_price_wizard:telegram_add_25_price:+۲۵ GB'}],[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]
+        tg_answer(cb.get('id','')); tg_edit(chat_id,mid,text+'\n\nبرای تعیین قیمت، روی گزینه موردنظر بزن. بعد می‌توانی قیمت را از دکمه‌های آماده انتخاب کنی یا قیمت دلخواه وارد کنی.',kb); return
+    if data.startswith('admin_price_wizard:'):
         if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
         try:
-            _,key,val=data.split(':',2); set_setting(key,val); tg_answer(cb.get('id',''),'قیمت ذخیره شد'); tg_edit(chat_id,mid,f'✅ قیمت ذخیره شد\n\n{html.escape(key)}: <b>{tg_money(val)} تومان</b>',[[{'text':'💰 قیمت‌ها','callback_data':'admin_prices'},{'text':'🛠 مدیریت ربات','callback_data':'admin'}]])
+            _,key,label=data.split(':',2)
+            tg_set_admin_wizard({'type':'price','step':'choose','data':{'key':key,'label':label}})
+            current=tg_price(key,0)
+            kb=[[{'text':'25,000 تومان','callback_data':'admin_price_set:25000'},{'text':'50,000 تومان','callback_data':'admin_price_set:50000'}],[{'text':'100,000 تومان','callback_data':'admin_price_set:100000'},{'text':'150,000 تومان','callback_data':'admin_price_set:150000'}],[{'text':'250,000 تومان','callback_data':'admin_price_set:250000'},{'text':'500,000 تومان','callback_data':'admin_price_set:500000'}],[{'text':'🖊 قیمت دلخواه','callback_data':'admin_price_custom'}],[{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]
+            tg_answer(cb.get('id','')); tg_edit(chat_id,mid,f'<b>💰 تعیین قیمت</b>\n\n{html.escape(label)}\nقیمت فعلی: <b>{tg_money(current)} تومان</b>\n\nیک قیمت آماده انتخاب کن یا «قیمت دلخواه» را بزن.',kb)
+        except Exception: tg_answer(cb.get('id',''),'خطا در شروع تعیین قیمت')
+        return
+    if data.startswith('admin_price_set:'):
+        if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
+        try:
+            wiz=tg_admin_wizard(); amount=data.split(':',1)[1]
+            if wiz.get('type')!='price': raise ValueError()
+            key=wiz.get('data',{}).get('key'); label=wiz.get('data',{}).get('label','قیمت')
+            if not key: raise ValueError()
+            set_setting(key,amount); tg_clear_admin_wizard(); tg_answer(cb.get('id',''),'قیمت ذخیره شد'); tg_edit(chat_id,mid,f'✅ <b>{html.escape(label)}</b>\n\nقیمت جدید: <b>{tg_money(amount)} تومان</b>',[[{'text':'💰 قیمت‌های تمدید/حجم','callback_data':'admin_prices'}],[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]])
         except Exception: tg_answer(cb.get('id',''),'خطا در ذخیره قیمت')
         return
+    if data=='admin_price_custom':
+        if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
+        wiz=tg_admin_wizard()
+        if wiz.get('type')!='price': tg_answer(cb.get('id',''),'عملیات منقضی شده است'); return
+        tg_set_admin_wizard({'type':'price','step':'custom','data':wiz.get('data',{})})
+        tg_answer(cb.get('id','')); tg_edit(chat_id,mid,'🖊 <b>قیمت دلخواه</b>\n\nمبلغ را به تومان ارسال کن.\nمثلاً: <code>120000</code>',[[{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]); return
     if data=='admin_settings':
         if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
         st=settings(); tg_answer(cb.get('id','')); tg_edit(chat_id,mid,f'<b>⚙️ تنظیمات فروشگاه</b>\n\nخوش‌آمدگویی: {html.escape(st.get("telegram_welcome_text", ""))}\nتست رایگان: {"فعال" if st.get("telegram_trial_enabled","1")=="1" else "غیرفعال"}\nحجم تست: {st.get("telegram_trial_gb","1")} GB\nمدت تست: {st.get("telegram_trial_days","1")} روز\nپاداش دعوت: {st.get("telegram_referral_reward","1")} GB\nکانال اجباری: {html.escape(st.get("telegram_mandatory_channel","") or "ندارد")}\n\nبرای تغییر از دستورهای ربات استفاده کن: /setwelcome /settrial /setref /setchannel',[[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]); return
@@ -1084,6 +1104,16 @@ def tg_handle_message(msg):
                     data2['price']=price; arr=tg_plans(); arr.append(data2); set_setting('telegram_plans',json.dumps(arr[:20],ensure_ascii=False)); tg_clear_admin_wizard(); tg_send(uid,f'🎉 <b>پلن ساخته شد</b>\n\nنام: {html.escape(str(data2["name"]))}\nحجم: {data2["gb"]:g} GB\nمدت: {data2["days"]} روز\nقیمت: {tg_money(price)} تومان',[[{'text':'➕ افزودن پلن دیگر','callback_data':'admin_addplan'},{'text':'🛒 مدیریت پلن‌ها','callback_data':'admin_plans'}],[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]); return
             except Exception:
                 tg_send(uid,'⚠️ مقدار واردشده معتبر نیست. دوباره همین مرحله را امتحان کن یا لغو را بزن.'); return
+        if wiz.get('type')=='price':
+            try:
+                step=wiz.get('step'); data2=wiz.get('data',{}); key=data2.get('key'); label=data2.get('label','قیمت')
+                if not key: raise ValueError()
+                if step!='custom': raise ValueError()
+                price=text.replace(',','').replace('٬','').replace('تومان','').strip()
+                if not price.isdigit() or int(price)<=0: raise ValueError()
+                set_setting(key,price); tg_clear_admin_wizard(); tg_send(uid,f'✅ <b>{html.escape(label)}</b> ذخیره شد.\n\nقیمت جدید: <b>{tg_money(price)} تومان</b>',[[{'text':'💰 قیمت‌های تمدید/حجم','callback_data':'admin_prices'}],[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]); return
+            except Exception:
+                tg_send(uid,'⚠️ قیمت معتبر نیست. یک عدد مثل 120000 ارسال کن یا /cancel بزن.'); return
         if wiz.get('type')=='wallet':
             try:
                 amount=float(text.replace(',','').replace('٬','').strip()); target=int(wiz.get('data',{}).get('uid',0))
