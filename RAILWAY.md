@@ -1,7 +1,7 @@
 # راه‌اندازی سریع Railway
 
 ### 1) Volume
-Service → Volumes → Add Volume → Mount Path: `/data`
+برای اجرا نیازی به Railway Volume نیست؛ داده‌ها در فضای داخلی سرویس ذخیره می‌شوند.
 
 ### 2) Variables
 اگر Target Port دامنه را 8080 می‌گذاری:
