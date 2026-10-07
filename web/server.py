@@ -583,6 +583,17 @@ def tg_admin_id():
     try: return int(str(settings().get('telegram_admin_id','')).strip())
     except Exception: return 0
 
+
+def tg_admin_wizard():
+    try: return json.loads(settings().get('telegram_admin_wizard','{}') or '{}')
+    except Exception: return {}
+
+def tg_set_admin_wizard(state):
+    set_setting('telegram_admin_wizard', json.dumps(state or {}, ensure_ascii=False))
+
+def tg_clear_admin_wizard():
+    set_setting('telegram_admin_wizard', '{}')
+
 def tg_create_client(order):
     now=int(time.time()); sub_id=secrets.token_urlsafe(18); cuuid=str(uuid.uuid4()); name=f"TG-{order['id']}-{order['telegram_user_id']}"
     st=settings(); host=clean_host(st.get('node_host')) or clean_host(os.environ.get('RAILWAY_PUBLIC_DOMAIN'))
@@ -630,7 +641,13 @@ def tg_handle_callback(cb):
     if data=='admin_card':
         if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
         st=settings(); card=st.get('telegram_card_number','') or 'ثبت نشده'; name=st.get('telegram_card_name','') or 'ثبت نشده'
-        tg_answer(cb.get('id','')); tg_edit(chat_id,mid,f'<b>💳 اطلاعات پرداخت کارت</b>\n\nشماره کارت: <code>{html.escape(card)}</code>\nنام صاحب کارت: <b>{html.escape(name)}</b>\n\nتغییر سریع با دستورهای زیر در همین ربات:\n<code>/setcard 6037...</code>\n<code>/setcardname نام صاحب کارت</code>',[[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]); return
+        tg_answer(cb.get('id','')); tg_edit(chat_id,mid,f'<b>💳 اطلاعات پرداخت</b>\n\nشماره کارت: <code>{html.escape(card)}</code>\nنام صاحب کارت: <b>{html.escape(name)}</b>\n\nبرای تغییر، فقط دکمه ثبت کارت را بزن؛ ربات مرحله‌به‌مرحله شماره کارت و نام صاحب کارت را می‌پرسد.',[[{'text':'➕ ثبت / تغییر کارت','callback_data':'admin_card_add'}],[{'text':'🗑 حذف شماره کارت','callback_data':'admin_card_delete'}],[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]); return
+    if data=='admin_card_add':
+        if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
+        tg_set_admin_wizard({'type':'card','step':'number'}); tg_answer(cb.get('id','')); tg_edit(chat_id,mid,'<b>💳 ثبت شماره کارت</b>\n\nمرحله ۱ از ۲\nشماره کارت ۱۶ رقمی را همینجا ارسال کن.\n\nبرای لغو: /cancel',[[{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]); return
+    if data=='admin_card_delete':
+        if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
+        set_setting('telegram_card_number',''); set_setting('telegram_card_name',''); tg_answer(cb.get('id',''),'حذف شد'); tg_edit(chat_id,mid,'✅ اطلاعات کارت حذف شد.',[[{'text':'💳 اطلاعات پرداخت','callback_data':'admin_card'},{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]); return
     if data=='admin_stats':
         if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
         c=db(); users=c.execute('SELECT COUNT(*) n FROM telegram_users').fetchone()['n']; orders=c.execute('SELECT COUNT(*) n FROM telegram_orders').fetchone()['n']; approved=c.execute("SELECT COUNT(*) n FROM telegram_orders WHERE status='approved'").fetchone()['n']; pending=c.execute("SELECT COUNT(*) n FROM telegram_orders WHERE status='pending_admin'").fetchone()['n']; tickets=c.execute("SELECT COUNT(*) n FROM telegram_tickets WHERE status='open'").fetchone()['n']; c.close()
@@ -640,9 +657,34 @@ def tg_handle_callback(cb):
         st=settings(); tg_answer(cb.get('id','')); tg_edit(chat_id,mid,f'<b>⚙️ تنظیمات فروشگاه</b>\n\nخوش‌آمدگویی: {html.escape(st.get("telegram_welcome_text", ""))}\nتست رایگان: {"فعال" if st.get("telegram_trial_enabled","1")=="1" else "غیرفعال"}\nحجم تست: {st.get("telegram_trial_gb","1")} GB\nمدت تست: {st.get("telegram_trial_days","1")} روز\nپاداش دعوت: {st.get("telegram_referral_reward","1")} GB\nکانال اجباری: {html.escape(st.get("telegram_mandatory_channel","") or "ندارد")}\n\nبرای تغییر از دستورهای ربات استفاده کن: /setwelcome /settrial /setref /setchannel',[[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]); return
     if data=='admin_plans':
         if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
-        arr=tg_plans(); lines=['<b>🛒 پلن‌های فروش</b>'] + [f'{i+1}. {html.escape(str(x.get("name","پلن")))} — {x.get("gb")}GB / {x.get("days")} روز — {html.escape(str(x.get("price","") or "بدون قیمت"))}' for i,x in enumerate(arr)]
-        lines += ['','افزودن پلن با دستور:', '<code>/addplan نام | حجم | روز | قیمت</code>', 'مثال: <code>/addplan 50GB | 50 | 30 | 100000</code>', 'حذف پلن: <code>/delplan شماره</code>']
-        tg_answer(cb.get('id','')); tg_edit(chat_id,mid,'\n'.join(lines),[[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]); return
+        arr=tg_plans(); lines=['<b>🛒 مدیریت پلن‌ها</b>']
+        if arr:
+            lines += ['\n<b>پلن‌های فعلی:</b>'] + [f'{i+1}. {html.escape(str(x.get("name","پلن")))} — {x.get("gb")}GB / {x.get("days")} روز — {html.escape(str(x.get("price","") or "بدون قیمت"))}' for i,x in enumerate(arr)]
+        else: lines.append('\nهنوز هیچ پلنی ثبت نشده است.')
+        tg_answer(cb.get('id','')); tg_edit(chat_id,mid,'\n'.join(lines),[[{'text':'➕ افزودن پلن جدید','callback_data':'admin_addplan'}],[{'text':'🗑 حذف یک پلن','callback_data':'admin_deleteplan'}],[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]); return
+    if data=='admin_addplan':
+        if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
+        tg_set_admin_wizard({'type':'plan','step':'name','data':{}}); tg_answer(cb.get('id','')); tg_edit(chat_id,mid,'<b>➕ افزودن پلن جدید</b>\n\nمرحله ۱ از ۴\nنام پلن را بفرست؛ مثلاً: <code>اقتصادی 30 روزه</code>\n\nبرای لغو: /cancel',[[{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]); return
+    if data=='admin_deleteplan':
+        if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
+        arr=tg_plans()
+        if not arr: tg_answer(cb.get('id',''),'پلنی وجود ندارد'); return
+        rows=[[{'text':f'🗑 {i+1}. {str(x.get("name","پلن"))} — {x.get("gb")}GB / {x.get("days")} روز','callback_data':f'admin_delplan:{i}'}] for i,x in enumerate(arr)]
+        rows.append([{'text':'🔙 بازگشت','callback_data':'admin_plans'}]); tg_answer(cb.get('id','')); tg_edit(chat_id,mid,'<b>🗑 حذف پلن</b>\n\nروی پلنی که می‌خواهی حذف شود بزن:',rows); return
+    if data.startswith('admin_delplan:'):
+        if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
+        try:
+            idx=int(data.split(':',1)[1]); arr=tg_plans(); removed=arr.pop(idx); set_setting('telegram_plans',json.dumps(arr,ensure_ascii=False)); tg_answer(cb.get('id',''),'پلن حذف شد'); tg_edit(chat_id,mid,f'✅ پلن «{html.escape(str(removed.get("name","پلن")))}» حذف شد.',[[{'text':'🛒 مدیریت پلن‌ها','callback_data':'admin_plans'},{'text':'🛠 مدیریت ربات','callback_data':'admin'}]])
+        except Exception: tg_answer(cb.get('id',''),'پلن نامعتبر است')
+        return
+    if data=='admin_cancel_wizard':
+        if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
+        tg_clear_admin_wizard(); tg_answer(cb.get('id',''),'لغو شد'); tg_edit(chat_id,mid,'عملیات لغو شد.',[[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]); return
+    if data=='admin_plan_noprice':
+        if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
+        wiz=tg_admin_wizard()
+        if wiz.get('type')!='plan' or wiz.get('step')!='price': tg_answer(cb.get('id',''),'عملیات منقضی شده است'); return
+        data2=wiz.get('data',{}); data2['price']=''; arr=tg_plans(); arr.append(data2); set_setting('telegram_plans',json.dumps(arr[:20],ensure_ascii=False)); tg_clear_admin_wizard(); tg_answer(cb.get('id',''),'پلن ساخته شد'); tg_edit(chat_id,mid,f'🎉 پلن «{html.escape(str(data2.get("name","پلن")))}» ساخته شد.\n\nحجم: {data2.get("gb")} GB\nمدت: {data2.get("days")} روز\nقیمت: بدون قیمت',[[{'text':'➕ افزودن پلن دیگر','callback_data':'admin_addplan'},{'text':'🛒 مدیریت پلن‌ها','callback_data':'admin_plans'}],[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]); return
     if data=='admin_tickets':
         if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
         c=db(); rows=c.execute("SELECT * FROM telegram_tickets WHERE status='open' ORDER BY id DESC LIMIT 10").fetchall(); c.close(); lines=['<b>🎫 تیکت‌های باز</b>']
@@ -700,6 +742,43 @@ def tg_handle_callback(cb):
 def tg_handle_message(msg):
     chat=msg.get('chat',{}); uid=int(chat.get('id',0)); text=str(msg.get('text','')).strip()
     if not text:return
+
+    if uid==tg_admin_id():
+        wiz=tg_admin_wizard()
+        if text=='/cancel':
+            tg_clear_admin_wizard(); tg_send(uid,'❌ عملیات لغو شد.',tg_admin_keyboard()); return
+        if wiz.get('type')=='plan':
+            step=wiz.get('step'); data2=wiz.get('data',{})
+            try:
+                if step=='name':
+                    if len(text)<2: raise ValueError()
+                    data2['name']=text; tg_set_admin_wizard({'type':'plan','step':'gb','data':data2}); tg_send(uid,'✅ نام ثبت شد.\n\n<b>مرحله ۲ از ۴</b>\nحجم پلن را به GB بفرست؛ مثلاً <code>50</code>.',[[{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]); return
+                if step=='gb':
+                    gb=float(text.replace(',','.'));
+                    if gb<=0: raise ValueError()
+                    data2['gb']=gb; tg_set_admin_wizard({'type':'plan','step':'days','data':data2}); tg_send(uid,'✅ حجم ثبت شد.\n\n<b>مرحله ۳ از ۴</b>\nمدت پلن را به روز بفرست؛ مثلاً <code>30</code>.',[[{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]); return
+                if step=='days':
+                    days=int(text);
+                    if days<=0: raise ValueError()
+                    data2['days']=days; tg_set_admin_wizard({'type':'plan','step':'price','data':data2}); tg_send(uid,'✅ مدت ثبت شد.\n\n<b>مرحله ۴ از ۴</b>\nقیمت را به تومان بفرست؛ مثلاً <code>100000</code>.',[[{'text':'⏭ بدون قیمت','callback_data':'admin_plan_noprice'},{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]); return
+                if step=='price':
+                    price=text.replace(',','').replace('٬','').strip()
+                    if not price.isdigit(): raise ValueError()
+                    data2['price']=price; arr=tg_plans(); arr.append(data2); set_setting('telegram_plans',json.dumps(arr[:20],ensure_ascii=False)); tg_clear_admin_wizard(); tg_send(uid,f'🎉 پلن «{html.escape(str(data2["name"]))}» با موفقیت ساخته شد.\n\nحجم: {data2["gb"]} GB\nمدت: {data2["days"]} روز\nقیمت: {tg_money(price)} تومان',[[{'text':'➕ افزودن پلن دیگر','callback_data':'admin_addplan'},{'text':'🛒 مدیریت پلن‌ها','callback_data':'admin_plans'}],[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]); return
+            except Exception:
+                tg_send(uid,'⚠️ مقدار واردشده معتبر نیست. دوباره همین مرحله را وارد کن یا /cancel بزن.'); return
+        if wiz.get('type')=='card':
+            step=wiz.get('step')
+            if step=='number':
+                card=text.replace(' ','').replace('-','')
+                if not card.isdigit() or len(card)!=16:
+                    tg_send(uid,'⚠️ شماره کارت باید دقیقاً ۱۶ رقم باشد.'); return
+                tg_set_admin_wizard({'type':'card','step':'name','data':{'card':card}}); tg_send(uid,'✅ شماره کارت ثبت شد.\n\n<b>مرحله ۲ از ۲</b>\nنام صاحب کارت را بفرست؛ مثلاً: <code>علی رضایی</code>.',[[{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]); return
+            if step=='name':
+                name=text.strip()
+                if len(name)<2: tg_send(uid,'⚠️ نام صاحب کارت را وارد کن.'); return
+                card=wiz.get('data',{}).get('card',''); set_setting('telegram_card_number',card); set_setting('telegram_card_name',name); tg_clear_admin_wizard(); tg_send(uid,f'✅ اطلاعات کارت ذخیره شد.\n\nشماره کارت: <code>{html.escape(card)}</code>\nبه نام: <b>{html.escape(name)}</b>',[[{'text':'🛠 مدیریت ربات','callback_data':'admin'},{'text':'💳 اطلاعات پرداخت','callback_data':'admin_card'}]]); return
+
     if text.startswith('/claimadmin'):
         # First private user can claim admin only when no admin ID has been configured yet.
         current=tg_admin_id()
