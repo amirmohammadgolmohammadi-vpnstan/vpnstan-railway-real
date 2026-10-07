@@ -922,7 +922,14 @@ def tg_handle_callback(cb):
             f'+10 GB: <b>{tg_money(st.get("telegram_add_10_price",50000))}</b> تومان\n'
             f'+25 GB: <b>{tg_money(st.get("telegram_add_25_price",100000))}</b> تومان\n\n'
             'برای تغییر: /setrenewprices 30000 100000 250000\n<code>/setvolprices 30000 50000 100000</code>')
-        tg_answer(cb.get('id','')); tg_edit(chat_id,mid,text,[[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]); return
+        kb=[[{'text':'تمدید ۷ روز','callback_data':'admin_setprice:telegram_renew_7_price:30000'},{'text':'تمدید ۳۰ روز','callback_data':'admin_setprice:telegram_renew_30_price:100000'}],[{'text':'تمدید ۹۰ روز','callback_data':'admin_setprice:telegram_renew_90_price:250000'}],[{'text':'+۵ GB','callback_data':'admin_setprice:telegram_add_5_price:30000'},{'text':'+۱۰ GB','callback_data':'admin_setprice:telegram_add_10_price:50000'},{'text':'+۲۵ GB','callback_data':'admin_setprice:telegram_add_25_price:100000'}],[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]
+        tg_answer(cb.get('id','')); tg_edit(chat_id,mid,text+'\n\nبرای تغییر، روی گزینه موردنظر بزن؛ قیمت پیش‌فرض همان گزینه اعمال می‌شود. برای قیمت دلخواه از دستورهای قبلی استفاده کن.',kb); return
+    if data.startswith('admin_setprice:'):
+        if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
+        try:
+            _,key,val=data.split(':',2); set_setting(key,val); tg_answer(cb.get('id',''),'قیمت ذخیره شد'); tg_edit(chat_id,mid,f'✅ قیمت ذخیره شد\n\n{html.escape(key)}: <b>{tg_money(val)} تومان</b>',[[{'text':'💰 قیمت‌ها','callback_data':'admin_prices'},{'text':'🛠 مدیریت ربات','callback_data':'admin'}]])
+        except Exception: tg_answer(cb.get('id',''),'خطا در ذخیره قیمت')
+        return
     if data=='admin_settings':
         if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
         st=settings(); tg_answer(cb.get('id','')); tg_edit(chat_id,mid,f'<b>⚙️ تنظیمات فروشگاه</b>\n\nخوش‌آمدگویی: {html.escape(st.get("telegram_welcome_text", ""))}\nتست رایگان: {"فعال" if st.get("telegram_trial_enabled","1")=="1" else "غیرفعال"}\nحجم تست: {st.get("telegram_trial_gb","1")} GB\nمدت تست: {st.get("telegram_trial_days","1")} روز\nپاداش دعوت: {st.get("telegram_referral_reward","1")} GB\nکانال اجباری: {html.escape(st.get("telegram_mandatory_channel","") or "ندارد")}\n\nبرای تغییر از دستورهای ربات استفاده کن: /setwelcome /settrial /setref /setchannel',[[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]); return
@@ -935,7 +942,39 @@ def tg_handle_callback(cb):
         tg_answer(cb.get('id','')); tg_edit(chat_id,mid,'\n'.join(lines),[[{'text':'➕ افزودن پلن جدید','callback_data':'admin_addplan'}],[{'text':'🗑 حذف یک پلن','callback_data':'admin_deleteplan'}],[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]); return
     if data=='admin_addplan':
         if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
-        tg_set_admin_wizard({'type':'plan','step':'name','data':{}}); tg_answer(cb.get('id','')); tg_edit(chat_id,mid,'<b>➕ افزودن پلن جدید</b>\n\nمرحله ۱ از ۴\nنام پلن را بفرست؛ مثلاً: <code>اقتصادی 30 روزه</code>\n\nبرای لغو: /cancel',[[{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]); return
+        tg_set_admin_wizard({'type':'plan','step':'name','data':{}}); tg_answer(cb.get('id','')); tg_edit(chat_id,mid,'<b>➕ افزودن پلن جدید</b>\n\n<b>مرحله ۱ از ۴</b>\nنام پلن را انتخاب کن یا نام دلخواهت را بفرست:',[[{'text':'💚 اقتصادی','callback_data':'admin_plan_name:اقتصادی'},{'text':'💙 استاندارد','callback_data':'admin_plan_name:استاندارد'}],[{'text':'💜 حرفه‌ای','callback_data':'admin_plan_name:حرفه‌ای'},{'text':'🖊 نام دلخواه','callback_data':'admin_plan_name_custom'}],[{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]); return
+    if data.startswith('admin_plan_name:'):
+        if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
+        wiz=tg_admin_wizard();
+        if wiz.get('type')!='plan' or wiz.get('step')!='name': tg_answer(cb.get('id',''),'عملیات منقضی شده است'); return
+        name=data.split(':',1)[1].strip(); d=wiz.get('data',{}); d['name']=name; tg_set_admin_wizard({'type':'plan','step':'gb','data':d}); tg_answer(cb.get('id','')); tg_edit(chat_id,mid,f'✅ نام: <b>{html.escape(name)}</b>\n\n<b>مرحله ۲ از ۴</b>\nحجم پلن را انتخاب کن:',[[{'text':'5 GB','callback_data':'admin_plan_gb:5'},{'text':'10 GB','callback_data':'admin_plan_gb:10'},{'text':'20 GB','callback_data':'admin_plan_gb:20'}],[{'text':'30 GB','callback_data':'admin_plan_gb:30'},{'text':'50 GB','callback_data':'admin_plan_gb:50'},{'text':'100 GB','callback_data':'admin_plan_gb:100'}],[{'text':'🖊 حجم دلخواه','callback_data':'admin_plan_gb_custom'}],[{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]); return
+    if data=='admin_plan_name_custom':
+        if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
+        wiz=tg_admin_wizard(); d=wiz.get('data',{}); tg_set_admin_wizard({'type':'plan','step':'name_custom','data':d}); tg_answer(cb.get('id','')); tg_edit(chat_id,mid,'🖊 <b>نام دلخواه پلن</b>\n\nنام پلن را ارسال کن:',[[{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]); return
+    if data.startswith('admin_plan_gb:'):
+        if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
+        wiz=tg_admin_wizard();
+        if wiz.get('type')!='plan' or wiz.get('step')!='gb': tg_answer(cb.get('id',''),'عملیات منقضی شده است'); return
+        gb=float(data.split(':',1)[1]); d=wiz.get('data',{}); d['gb']=gb; tg_set_admin_wizard({'type':'plan','step':'days','data':d}); tg_answer(cb.get('id','')); tg_edit(chat_id,mid,f'✅ حجم: <b>{gb:g} GB</b>\n\n<b>مرحله ۳ از ۴</b>\nمدت پلن را انتخاب کن:',[[{'text':'7 روز','callback_data':'admin_plan_days:7'},{'text':'15 روز','callback_data':'admin_plan_days:15'},{'text':'30 روز','callback_data':'admin_plan_days:30'}],[{'text':'60 روز','callback_data':'admin_plan_days:60'},{'text':'90 روز','callback_data':'admin_plan_days:90'},{'text':'180 روز','callback_data':'admin_plan_days:180'}],[{'text':'🖊 مدت دلخواه','callback_data':'admin_plan_days_custom'}],[{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]); return
+    if data=='admin_plan_gb_custom':
+        if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
+        wiz=tg_admin_wizard(); d=wiz.get('data',{}); tg_set_admin_wizard({'type':'plan','step':'gb_custom','data':d}); tg_answer(cb.get('id','')); tg_edit(chat_id,mid,'🖊 <b>حجم دلخواه</b>\n\nحجم را به GB ارسال کن؛ مثلاً <code>75</code>.',[[{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]); return
+    if data.startswith('admin_plan_days:'):
+        if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
+        wiz=tg_admin_wizard();
+        if wiz.get('type')!='plan' or wiz.get('step')!='days': tg_answer(cb.get('id',''),'عملیات منقضی شده است'); return
+        days=int(data.split(':',1)[1]); d=wiz.get('data',{}); d['days']=days; tg_set_admin_wizard({'type':'plan','step':'price','data':d}); tg_answer(cb.get('id','')); tg_edit(chat_id,mid,f'✅ مدت: <b>{days} روز</b>\n\n<b>مرحله ۴ از ۴</b>\nقیمت پلن را انتخاب کن:',[[{'text':'25,000 تومان','callback_data':'admin_plan_price:25000'},{'text':'50,000 تومان','callback_data':'admin_plan_price:50000'}],[{'text':'100,000 تومان','callback_data':'admin_plan_price:100000'},{'text':'150,000 تومان','callback_data':'admin_plan_price:150000'}],[{'text':'250,000 تومان','callback_data':'admin_plan_price:250000'},{'text':'500,000 تومان','callback_data':'admin_plan_price:500000'}],[{'text':'🖊 قیمت دلخواه','callback_data':'admin_plan_price_custom'},{'text':'⏭ بدون قیمت','callback_data':'admin_plan_noprice'}],[{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]); return
+    if data=='admin_plan_days_custom':
+        if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
+        wiz=tg_admin_wizard(); d=wiz.get('data',{}); tg_set_admin_wizard({'type':'plan','step':'days_custom','data':d}); tg_answer(cb.get('id','')); tg_edit(chat_id,mid,'🖊 <b>مدت دلخواه</b>\n\nمدت را به روز ارسال کن؛ مثلاً <code>45</code>.',[[{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]); return
+    if data.startswith('admin_plan_price:'):
+        if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
+        wiz=tg_admin_wizard();
+        if wiz.get('type')!='plan' or wiz.get('step')!='price': tg_answer(cb.get('id',''),'عملیات منقضی شده است'); return
+        price=data.split(':',1)[1]; d=wiz.get('data',{}); d['price']=price; arr=tg_plans(); arr.append(d); set_setting('telegram_plans',json.dumps(arr[:20],ensure_ascii=False)); tg_clear_admin_wizard(); tg_answer(cb.get('id',''),'پلن ساخته شد'); tg_edit(chat_id,mid,f'🎉 <b>پلن ساخته شد</b>\n\nنام: {html.escape(str(d["name"]))}\nحجم: {d["gb"]:g} GB\nمدت: {d["days"]} روز\nقیمت: {tg_money(price)} تومان',[[{'text':'➕ افزودن پلن دیگر','callback_data':'admin_addplan'},{'text':'🛒 مدیریت پلن‌ها','callback_data':'admin_plans'}],[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]); return
+    if data=='admin_plan_price_custom':
+        if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
+        wiz=tg_admin_wizard(); d=wiz.get('data',{}); tg_set_admin_wizard({'type':'plan','step':'price_custom','data':d}); tg_answer(cb.get('id','')); tg_edit(chat_id,mid,'🖊 <b>قیمت دلخواه</b>\n\nقیمت را به تومان ارسال کن؛ مثلاً <code>120000</code>.',[[{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]); return
     if data=='admin_deleteplan':
         if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
         arr=tg_plans()
@@ -1023,21 +1062,28 @@ def tg_handle_message(msg):
             try:
                 if step=='name':
                     if len(text)<2: raise ValueError()
-                    data2['name']=text; tg_set_admin_wizard({'type':'plan','step':'gb','data':data2}); tg_send(uid,'✅ نام ثبت شد.\n\n<b>مرحله ۲ از ۴</b>\nحجم پلن را به GB بفرست؛ مثلاً <code>50</code>.',[[{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]); return
-                if step=='gb':
-                    gb=float(text.replace(',','.'));
+                    data2['name']=text; tg_set_admin_wizard({'type':'plan','step':'gb','data':data2}); tg_send(uid,'✅ نام ثبت شد.\n\n<b>مرحله ۲ از ۴</b>\nحجم پلن را انتخاب کن:',[[{'text':'5 GB','callback_data':'admin_plan_gb:5'},{'text':'10 GB','callback_data':'admin_plan_gb:10'},{'text':'20 GB','callback_data':'admin_plan_gb:20'}],[{'text':'30 GB','callback_data':'admin_plan_gb:30'},{'text':'50 GB','callback_data':'admin_plan_gb:50'},{'text':'100 GB','callback_data':'admin_plan_gb:100'}],[{'text':'🖊 حجم دلخواه','callback_data':'admin_plan_gb_custom'}],[{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]); return
+                if step=='name_custom':
+                    if len(text)<2: raise ValueError()
+                    data2['name']=text; tg_set_admin_wizard({'type':'plan','step':'gb','data':data2}); tg_send(uid,'✅ نام ثبت شد.\n\n<b>مرحله ۲ از ۴</b>\nحجم پلن را انتخاب کن:',[[{'text':'5 GB','callback_data':'admin_plan_gb:5'},{'text':'10 GB','callback_data':'admin_plan_gb:10'},{'text':'20 GB','callback_data':'admin_plan_gb:20'}],[{'text':'30 GB','callback_data':'admin_plan_gb:30'},{'text':'50 GB','callback_data':'admin_plan_gb:50'},{'text':'100 GB','callback_data':'admin_plan_gb:100'}],[{'text':'🖊 حجم دلخواه','callback_data':'admin_plan_gb_custom'}],[{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]); return
+                if step=='gb_custom':
+                    gb=float(text.replace(',','.').replace('٬','').strip())
                     if gb<=0: raise ValueError()
-                    data2['gb']=gb; tg_set_admin_wizard({'type':'plan','step':'days','data':data2}); tg_send(uid,'✅ حجم ثبت شد.\n\n<b>مرحله ۳ از ۴</b>\nمدت پلن را به روز بفرست؛ مثلاً <code>30</code>.',[[{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]); return
-                if step=='days':
-                    days=int(text);
+                    data2['gb']=gb; tg_set_admin_wizard({'type':'plan','step':'days','data':data2}); tg_send(uid,'✅ حجم ثبت شد.\n\n<b>مرحله ۳ از ۴</b>\nمدت پلن را انتخاب کن:',[[{'text':'7 روز','callback_data':'admin_plan_days:7'},{'text':'15 روز','callback_data':'admin_plan_days:15'},{'text':'30 روز','callback_data':'admin_plan_days:30'}],[{'text':'60 روز','callback_data':'admin_plan_days:60'},{'text':'90 روز','callback_data':'admin_plan_days:90'},{'text':'180 روز','callback_data':'admin_plan_days:180'}],[{'text':'🖊 مدت دلخواه','callback_data':'admin_plan_days_custom'}],[{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]); return
+                if step=='days_custom':
+                    days=int(text.replace('٬','').replace(',','').strip())
                     if days<=0: raise ValueError()
-                    data2['days']=days; tg_set_admin_wizard({'type':'plan','step':'price','data':data2}); tg_send(uid,'✅ مدت ثبت شد.\n\n<b>مرحله ۴ از ۴</b>\nقیمت را به تومان بفرست؛ مثلاً <code>100000</code>.',[[{'text':'⏭ بدون قیمت','callback_data':'admin_plan_noprice'},{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]); return
+                    data2['days']=days; tg_set_admin_wizard({'type':'plan','step':'price','data':data2}); tg_send(uid,'✅ مدت ثبت شد.\n\n<b>مرحله ۴ از ۴</b>\nقیمت پلن را انتخاب کن:',[[{'text':'25,000 تومان','callback_data':'admin_plan_price:25000'},{'text':'50,000 تومان','callback_data':'admin_plan_price:50000'}],[{'text':'100,000 تومان','callback_data':'admin_plan_price:100000'},{'text':'150,000 تومان','callback_data':'admin_plan_price:150000'}],[{'text':'250,000 تومان','callback_data':'admin_plan_price:250000'},{'text':'500,000 تومان','callback_data':'admin_plan_price:500000'}],[{'text':'🖊 قیمت دلخواه','callback_data':'admin_plan_price_custom'},{'text':'⏭ بدون قیمت','callback_data':'admin_plan_noprice'}],[{'text':'❌ لغو','callback_data':'admin_cancel_wizard'}]]); return
+                if step=='price_custom':
+                    price=text.replace(',','').replace('٬','').strip()
+                    if not price.isdigit(): raise ValueError()
+                    data2['price']=price; arr=tg_plans(); arr.append(data2); set_setting('telegram_plans',json.dumps(arr[:20],ensure_ascii=False)); tg_clear_admin_wizard(); tg_send(uid,f'🎉 <b>پلن ساخته شد</b>\n\nنام: {html.escape(str(data2["name"]))}\nحجم: {data2["gb"]:g} GB\nمدت: {data2["days"]} روز\nقیمت: {tg_money(price)} تومان',[[{'text':'➕ افزودن پلن دیگر','callback_data':'admin_addplan'},{'text':'🛒 مدیریت پلن‌ها','callback_data':'admin_plans'}],[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]); return
                 if step=='price':
                     price=text.replace(',','').replace('٬','').strip()
                     if not price.isdigit(): raise ValueError()
-                    data2['price']=price; arr=tg_plans(); arr.append(data2); set_setting('telegram_plans',json.dumps(arr[:20],ensure_ascii=False)); tg_clear_admin_wizard(); tg_send(uid,f'🎉 پلن «{html.escape(str(data2["name"]))}» با موفقیت ساخته شد.\n\nحجم: {data2["gb"]} GB\nمدت: {data2["days"]} روز\nقیمت: {tg_money(price)} تومان',[[{'text':'➕ افزودن پلن دیگر','callback_data':'admin_addplan'},{'text':'🛒 مدیریت پلن‌ها','callback_data':'admin_plans'}],[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]); return
+                    data2['price']=price; arr=tg_plans(); arr.append(data2); set_setting('telegram_plans',json.dumps(arr[:20],ensure_ascii=False)); tg_clear_admin_wizard(); tg_send(uid,f'🎉 <b>پلن ساخته شد</b>\n\nنام: {html.escape(str(data2["name"]))}\nحجم: {data2["gb"]:g} GB\nمدت: {data2["days"]} روز\nقیمت: {tg_money(price)} تومان',[[{'text':'➕ افزودن پلن دیگر','callback_data':'admin_addplan'},{'text':'🛒 مدیریت پلن‌ها','callback_data':'admin_plans'}],[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]); return
             except Exception:
-                tg_send(uid,'⚠️ مقدار واردشده معتبر نیست. دوباره همین مرحله را وارد کن یا /cancel بزن.'); return
+                tg_send(uid,'⚠️ مقدار واردشده معتبر نیست. دوباره همین مرحله را امتحان کن یا لغو را بزن.'); return
         if wiz.get('type')=='wallet':
             try:
                 amount=float(text.replace(',','').replace('٬','').strip()); target=int(wiz.get('data',{}).get('uid',0))
