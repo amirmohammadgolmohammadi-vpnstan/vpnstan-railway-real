@@ -127,7 +127,7 @@ def init_db():
         except sqlite3.OperationalError: pass
     try: c.execute("ALTER TABLE panel_users ADD COLUMN panel_id INTEGER NOT NULL DEFAULT 0")
     except sqlite3.OperationalError: pass
-    for col,typ,default in [('protocol','TEXT',"'vless'"),('dns_server','TEXT',"'1.1.1.1'"),('wg_private_key','TEXT',"''"),('wg_address','TEXT',"''"),('dns_token','TEXT',"''"),('panel_id','INTEGER','0')]:
+    for col,typ,default in [('protocol','TEXT',"'vless'"),('transport','TEXT',"'ws'"),('dns_server','TEXT',"'1.1.1.1'"),('wg_private_key','TEXT',"''"),('wg_address','TEXT',"''"),('dns_token','TEXT',"''"),('panel_id','INTEGER','0')]:
         try: c.execute(f'ALTER TABLE clients ADD COLUMN {col} {typ} NOT NULL DEFAULT {default}')
         except sqlite3.OperationalError: pass
     # Seed the first administrator from environment variables, only on first startup.
@@ -135,7 +135,7 @@ def init_db():
         import hashlib
         ph=hashlib.sha256(PASSWORD.encode()).hexdigest()
         c.execute('INSERT INTO panel_users(username,password_hash,role,enabled,created_at) VALUES(?,?,?,?,?)',(USERNAME,ph,'admin',1,int(time.time())))
-    defaults={'node_host':DEFAULT_HOST,'node_port':str(DEFAULT_PORT),'ws_path':DEFAULT_PATH,'vmess_path':DEFAULT_VMESS_PATH,'sub_path':SUB_PATH,
+    defaults={'node_host':DEFAULT_HOST,'node_port':str(DEFAULT_PORT),'ws_path':DEFAULT_PATH,'vmess_path':DEFAULT_VMESS_PATH,'xhttp_path':'/xhttp','grpc_service':'vpnstan','grpc_path':'/grpc','httpupgrade_path':'/upgrade','vmess_xhttp_path':'/vmess-xhttp','vmess_grpc_path':'/vmess-grpc','vmess_httpupgrade_path':'/vmess-upgrade','trojan_ws_path':'/trojan','trojan_xhttp_path':'/trojan-xhttp','trojan_grpc_path':'/trojan-grpc','trojan_httpupgrade_path':'/trojan-upgrade','sub_path':SUB_PATH,
               'panel_title':'vpnstan','support_url':'','dns_server':'1.1.1.1,1.0.0.1','dns_profile':'cloudflare','wg_endpoint':'','wg_server_public_key':'','announce':'اشتراک vpnstan — برای دریافت آخرین کانفیگ، لینک اشتراک را به‌روزرسانی کنید.','update_interval':'1','theme':'dark'}
     for k,v in defaults.items(): c.execute('INSERT OR IGNORE INTO settings(k,v) VALUES(?,?)',(k,v))
     c.commit(); c.close()
@@ -234,26 +234,37 @@ def collect_xray_stats():
 
 def write_xray_config():
     os.makedirs(os.path.dirname(XRAY_CONFIG),exist_ok=True)
-    s=settings(); vpath=s.get('ws_path','/ws') or '/ws'; mpath=s.get('vmess_path','/vmess') or '/vmess'
-    rows=active_clients()
-    vclients=[{'id':r['uuid'],'email':'vpnstan-'+r['uuid'],'level':0} for r in rows if (r['protocol'] or 'vless')=='vless']
-    mclients=[{'id':r['uuid'],'email':'vpnstan-'+r['uuid'],'level':0,'alterId':0} for r in rows if (r['protocol'] or 'vless')=='vmess']
-    inbounds=[]
-    if vclients:
-        inbounds.append({'tag':'vless-ws','listen':'127.0.0.1','port':XRAY_INBOUND_PORT,'protocol':'vless',
-            'settings':{'clients':vclients,'decryption':'none'},
-            'streamSettings':{'network':'ws','security':'none','wsSettings':{'path':vpath}}})
-    if mclients:
-        inbounds.append({'tag':'vmess-ws','listen':'127.0.0.1','port':XRAY_VMESS_PORT,'protocol':'vmess',
-            'settings':{'clients':mclients},
-            'streamSettings':{'network':'ws','security':'none','wsSettings':{'path':mpath}}})
+    s=settings()
+    paths={
+        'vless_ws':s.get('ws_path','/ws') or '/ws','vmess_ws':s.get('vmess_path','/vmess') or '/vmess','trojan_ws':s.get('trojan_ws_path','/trojan') or '/trojan',
+        'vless_xhttp':s.get('xhttp_path','/xhttp') or '/xhttp','vmess_xhttp':s.get('vmess_xhttp_path','/vmess-xhttp') or '/vmess-xhttp','trojan_xhttp':s.get('trojan_xhttp_path','/trojan-xhttp') or '/trojan-xhttp',
+        'vless_grpc':s.get('grpc_path','/grpc') or '/grpc','vmess_grpc':s.get('vmess_grpc_path','/vmess-grpc') or '/vmess-grpc','trojan_grpc':s.get('trojan_grpc_path','/trojan-grpc') or '/trojan-grpc',
+        'vless_httpupgrade':s.get('httpupgrade_path','/upgrade') or '/upgrade','vmess_httpupgrade':s.get('vmess_httpupgrade_path','/vmess-upgrade') or '/vmess-upgrade','trojan_httpupgrade':s.get('trojan_httpupgrade_path','/trojan-upgrade') or '/trojan-upgrade'}
+    svc=s.get('grpc_service','vpnstan') or 'vpnstan'; rows=active_clients(); inbounds=[]; base=XRAY_INBOUND_PORT
+    transports=['ws','xhttp','grpc','httpupgrade']; protocols=['vless','vmess','trojan']
+    port_map={(proto,transport):base+(pi*4+ti) for pi,proto in enumerate(protocols) for ti,transport in enumerate(transports)}
+    for proto in protocols:
+        for transport in transports:
+            selected=[r for r in rows if (r['protocol'] or 'vless')==proto and (r['transport'] or 'ws')==transport]
+            if not selected: continue
+            if proto in ('vless','vmess'):
+                clients=[]
+                for r in selected:
+                    item={'id':r['uuid'],'email':'vpnstan-'+r['uuid'],'level':0}
+                    if proto=='vmess': item['alterId']=0
+                    clients.append(item)
+                settings_obj={'clients':clients,'decryption':'none'} if proto=='vless' else {'clients':clients}
+            else:
+                settings_obj={'clients':[{'password':r['uuid'],'email':'vpnstan-'+r['uuid'],'level':0} for r in selected]}
+            path=paths[f'{proto}_{transport}']; stream={'network':transport,'security':'none'}
+            if transport=='ws': stream['wsSettings']={'path':path}
+            elif transport=='xhttp': stream['xhttpSettings']={'path':path,'mode':'auto'}
+            elif transport=='grpc': stream['grpcSettings']={'serviceName':svc,'multiMode':False}
+            elif transport=='httpupgrade': stream['httpupgradeSettings']={'path':path}
+            inbounds.append({'tag':f'{proto}-{transport}','listen':'127.0.0.1','port':port_map[(proto,transport)],'protocol':proto,'settings':settings_obj,'streamSettings':stream})
     api_port=int(XRAY_API_ADDR.rsplit(':',1)[-1])
     api_inbound={'tag':'api','listen':'127.0.0.1','port':api_port,'protocol':'dokodemo-door','settings':{'address':'127.0.0.1'}}
-    cfg={'log':{'loglevel':'warning'},'api':{'tag':'api','services':['StatsService']},'stats':{},
-      'policy':{'levels':{'0':{'statsUserUplink':True,'statsUserDownlink':True,'statsUserOnline':True}},'system':{'statsInboundUplink':True,'statsInboundDownlink':True,'statsOutboundUplink':True,'statsOutboundDownlink':True}},
-      'inbounds':[api_inbound]+inbounds,
-      'routing':{'rules':[{'type':'field','inboundTag':['api'],'outboundTag':'api'}]},
-      'outbounds':[{'protocol':'freedom','tag':'direct'},{'protocol':'blackhole','tag':'block'}]}
+    cfg={'log':{'loglevel':'warning'},'api':{'tag':'api','services':['StatsService']},'stats':{},'policy':{'levels':{'0':{'statsUserUplink':True,'statsUserDownlink':True,'statsUserOnline':True}},'system':{'statsInboundUplink':True,'statsInboundDownlink':True,'statsOutboundUplink':True,'statsOutboundDownlink':True}},'inbounds':[api_inbound]+inbounds,'routing':{'rules':[{'type':'field','inboundTag':['api'],'outboundTag':'api'}]},'outbounds':[{'protocol':'freedom','tag':'direct'},{'protocol':'blackhole','tag':'block'}]}
     tmp=XRAY_CONFIG+'.tmp'
     with open(tmp,'w',encoding='utf-8') as f: json.dump(cfg,f,ensure_ascii=False,indent=2)
     os.replace(tmp,XRAY_CONFIG); return cfg
@@ -314,19 +325,26 @@ def host_for(h,s):
 
 
 def link_for(h,r,s):
-    proto=(r['protocol'] if 'protocol' in r.keys() else 'vless') or 'vless'
-    host=host_for(h,s); name=urllib.parse.quote(r['name'])
+    proto=(r['protocol'] if 'protocol' in r.keys() else 'vless') or 'vless'; host=host_for(h,s); name=urllib.parse.quote(r['name']); port=int(s.get('node_port','443'))
     if proto=='wireguard': return wg_config_for(h,r,s)
     if proto=='dns':
-        token=r['dns_token'] or ''
-        return f'https://{host}/doh/{token}' if token else ''
-    port=int(s.get('node_port','443'));
+        token=r['dns_token'] or ''; return f'https://{host}/doh/{token}' if token else ''
+    transport=(r['transport'] or 'ws').lower() if 'transport' in r.keys() else 'ws'
+    paths={'ws':s.get('ws_path','/ws'),'xhttp':s.get('xhttp_path','/xhttp'),'grpc':s.get('grpc_path','/grpc'),'httpupgrade':s.get('httpupgrade_path','/upgrade')}
+    path=paths.get(transport,'/ws') or '/ws'; svc=s.get('grpc_service','vpnstan') or 'vpnstan'
     if proto=='vmess':
-        obj={'v':'2','ps':r['name'],'add':host,'port':str(port),'id':r['uuid'],'aid':'0','scy':'auto','net':'ws','type':'none','host':host,'path':s.get('vmess_path','/vmess') or '/vmess','tls':'tls','sni':host}
+        obj={'v':'2','ps':r['name'],'add':host,'port':str(port),'id':r['uuid'],'aid':'0','scy':'auto','net':transport,'type':'none','host':host,'path':path,'tls':'tls','sni':host}
+        if transport=='grpc': obj['path']=svc
         return 'vmess://'+base64.b64encode(json.dumps(obj,separators=(',',':'),ensure_ascii=False).encode()).decode()
-    path=s.get('ws_path','/ws') or '/ws'
-    qp=urllib.parse.urlencode({'encryption':'none','security':'tls','type':'ws','host':host,'path':path,'sni':host},safe='/')
-    return f'vless://{r["uuid"]}@{host}:{port}?{qp}#{name}'
+    if proto=='trojan':
+        q={'security':'tls','type':transport,'sni':host}
+        if transport in ('ws','xhttp','httpupgrade'): q.update({'host':host,'path':path})
+        if transport=='grpc': q['serviceName']=svc
+        return f'trojan://{urllib.parse.quote(r["uuid"])}@{host}:{port}?{urllib.parse.urlencode(q,safe="/",quote_via=urllib.parse.quote)}#{name}'
+    q={'encryption':'none','security':'tls','type':transport,'sni':host}
+    if transport in ('ws','xhttp','httpupgrade'): q.update({'host':host,'path':path})
+    if transport=='grpc': q['serviceName']=svc
+    return f'vless://{r["uuid"]}@{host}:{port}?{urllib.parse.urlencode(q,safe="/",quote_via=urllib.parse.quote)}#{name}'
 
 def wg_config_for(h,r,s):
     endpoint=s.get('wg_endpoint','') or 'SET-WIREGUARD-ENDPOINT:51820'
@@ -615,7 +633,7 @@ class H(BaseHTTPRequestHandler):
             c=db(); c.execute('DELETE FROM panel_users WHERE id=?',(uid,)); c.commit(); c.close(); return send(self,200,{'success':True})
         if p=='/api/settings':
             if not has_permission(self,'settings_view'): return send(self,403,{'success':False,'msg':'دسترسی تنظیمات برای این پنل فعال نیست'})
-            try:d=body(self); allowed={'node_host','node_port','ws_path','vmess_path','sub_path','panel_title','support_url','announce','update_interval','wg_endpoint','wg_server_public_key','dns_server','dns_profile','theme'}
+            try:d=body(self); allowed={'node_host','node_port','ws_path','vmess_path','xhttp_path','grpc_service','grpc_path','httpupgrade_path','vmess_xhttp_path','vmess_grpc_path','vmess_httpupgrade_path','trojan_ws_path','trojan_xhttp_path','trojan_grpc_path','trojan_httpupgrade_path','sub_path','panel_title','support_url','announce','update_interval','wg_endpoint','wg_server_public_key','dns_server','dns_profile','theme'}
             except:return send(self,400,{'success':False,'msg':'درخواست نامعتبر'})
             if 'node_port' in d:
                 try: port=int(d['node_port']); assert 1<=port<=65535
@@ -626,8 +644,8 @@ class H(BaseHTTPRequestHandler):
         if p=='/api/clients/create':
             if not has_permission(self,'clients_create'): return send(self,403,{'success':False,'msg':'دسترسی ساخت کانفیگ برای این پنل فعال نیست'})
             try:
-                d=body(self); name=str(d.get('name','')).strip(); gb=float(d.get('gb',0)); days=int(d.get('days',0)); protocol=str(d.get('protocol','vless')).lower(); sub_count=int(d.get('subCount',1) or 1); st=settings(); dns_server=('internal' if protocol=='dns' else st.get('dns_server','')); scope=panel_scope(self) or 0
-                if protocol not in ('vless','vmess','wireguard','dns') or not name or gb<=0 or days<=0 or len(name)>80 or sub_count<1 or sub_count>20: raise ValueError
+                d=body(self); name=str(d.get('name','')).strip(); gb=float(d.get('gb',0)); days=int(d.get('days',0)); protocol=str(d.get('protocol','vless')).lower(); transport=str(d.get('transport','ws')).lower(); sub_count=int(d.get('subCount',1) or 1); st=settings(); dns_server=('internal' if protocol=='dns' else st.get('dns_server','')); scope=panel_scope(self) or 0
+                if protocol not in ('vless','vmess','trojan','wireguard','dns') or transport not in ('ws','xhttp','grpc','httpupgrade') or (protocol in ('wireguard','dns') and transport!='ws') or not name or gb<=0 or days<=0 or len(name)>80 or sub_count<1 or sub_count>20: raise ValueError
                 if protocol=='dns' and sub_count!=1: raise ValueError
             except:return send(self,400,{'success':False,'msg':'نام، حجم، مدت یا تعداد کانفیگ نامعتبر است'})
             now=int(time.time()); sub_id=secrets.token_urlsafe(18); rows=[]
@@ -635,8 +653,8 @@ class H(BaseHTTPRequestHandler):
             for i in range(sub_count):
                 cname=name if sub_count==1 else f'{name}-{i+1:02d}'
                 cuuid=str(uuid.uuid4()); dns_token=secrets.token_urlsafe(24) if protocol=='dns' else ''
-                r=(cname,cuuid,sub_id,gb,days,now,now+days*86400,protocol,dns_server,'','10.66.0.2/32',dns_token,scope)
-                c.execute('INSERT INTO clients(name,uuid,sub_id,gb,days,created_at,expiry_at,protocol,dns_server,wg_private_key,wg_address,dns_token,panel_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',r)
+                r=(cname,cuuid,sub_id,gb,days,now,now+days*86400,protocol,transport,dns_server,'','10.66.0.2/32',dns_token,scope)
+                c.execute('INSERT INTO clients(name,uuid,sub_id,gb,days,created_at,expiry_at,protocol,transport,dns_server,wg_private_key,wg_address,dns_token,panel_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',r)
                 rows.append(c.execute('SELECT * FROM clients WHERE uuid=?',(cuuid,)).fetchone())
             c.commit(); c.close(); restart_xray(); first=rows[0]
             return send(self,201,{'success':True,'count':sub_count,'subId':sub_id,'client':client_data(self,first,settings()),'clients':[client_data(self,r,settings()) for r in rows]})
@@ -644,8 +662,8 @@ class H(BaseHTTPRequestHandler):
             if not has_permission(self,'clients_edit'): return send(self,403,{'success':False,'msg':'دسترسی ویرایش کانفیگ برای این پنل فعال نیست'})
             try:
                 cid=int(p.split('/')[3]); d=body(self)
-                name=str(d.get('name','')).strip(); gb=float(d.get('gb',0)); days=int(d.get('days',0)); protocol=str(d.get('protocol','vless')).lower()
-                if not name or gb<=0 or days<=0 or len(name)>80 or protocol not in ('vless','vmess','wireguard','dns'): raise ValueError
+                name=str(d.get('name','')).strip(); gb=float(d.get('gb',0)); days=int(d.get('days',0)); protocol=str(d.get('protocol','vless')).lower(); transport=str(d.get('transport','ws')).lower()
+                if not name or gb<=0 or days<=0 or len(name)>80 or protocol not in ('vless','vmess','trojan','wireguard','dns') or transport not in ('ws','xhttp','grpc','httpupgrade') or (protocol in ('wireguard','dns') and transport!='ws'): raise ValueError
             except Exception:
                 return send(self,400,{'success':False,'msg':'نام، حجم، مدت یا پروتکل نامعتبر است'})
             c=db(); scope=panel_scope(self); old=c.execute('SELECT * FROM clients WHERE id=? AND panel_id=?',(cid,scope)).fetchone() if scope is not None else c.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone()
@@ -654,7 +672,7 @@ class H(BaseHTTPRequestHandler):
             dns_token=old['dns_token'] or (secrets.token_urlsafe(24) if protocol=='dns' else '')
             if protocol!='dns': dns_token=''
             dns_server='internal' if protocol=='dns' else ''
-            c.execute('UPDATE clients SET name=?,gb=?,days=?,expiry_at=?,protocol=?,dns_server=?,dns_token=?,enabled=1 WHERE id=?',(name,gb,days,expiry,protocol,dns_server,dns_token,cid)); c.commit(); row=c.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone(); c.close(); restart_xray(); return send(self,200,{'success':True,'client':client_data(self,row,settings())})
+            c.execute('UPDATE clients SET name=?,gb=?,days=?,expiry_at=?,protocol=?,transport=?,dns_server=?,dns_token=?,enabled=1 WHERE id=?',(name,gb,days,expiry,protocol,transport,dns_server,dns_token,cid)); c.commit(); row=c.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone(); c.close(); restart_xray(); return send(self,200,{'success':True,'client':client_data(self,row,settings())})
         if p.startswith('/api/clients/') and p.endswith('/toggle'):
             if not has_permission(self,'clients_edit'): return send(self,403,{'success':False,'msg':'دسترسی تغییر وضعیت برای این پنل فعال نیست'})
             try:cid=int(p.split('/')[3])
