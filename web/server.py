@@ -165,6 +165,10 @@ def init_db():
       client_id INTEGER PRIMARY KEY, upload INTEGER NOT NULL DEFAULT 0,
       download INTEGER NOT NULL DEFAULT 0, last_seen INTEGER NOT NULL DEFAULT 0,
       raw_upload INTEGER NOT NULL DEFAULT 0, raw_download INTEGER NOT NULL DEFAULT 0)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS telegram_orders(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_user_id INTEGER NOT NULL, username TEXT NOT NULL DEFAULT '',
+      plan_name TEXT NOT NULL, gb REAL NOT NULL, days INTEGER NOT NULL, price TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'created', client_id INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)''')
     for col in ('raw_upload','raw_download'):
         try: c.execute(f'ALTER TABLE traffic ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0')
         except sqlite3.OperationalError: pass
@@ -179,7 +183,7 @@ def init_db():
         ph=hashlib.sha256(PASSWORD.encode()).hexdigest()
         c.execute('INSERT INTO panel_users(username,password_hash,role,enabled,created_at) VALUES(?,?,?,?,?)',(USERNAME,ph,'admin',1,int(time.time())))
     defaults={'node_host':DEFAULT_HOST,'node_port':str(DEFAULT_PORT),'ws_path':DEFAULT_PATH,'vmess_path':DEFAULT_VMESS_PATH,'xhttp_path':'/xhttp','grpc_service':'vpnstan','grpc_path':'/grpc','httpupgrade_path':'/upgrade','vmess_xhttp_path':'/vmess-xhttp','vmess_grpc_path':'/vmess-grpc','vmess_httpupgrade_path':'/vmess-upgrade','trojan_ws_path':'/trojan','trojan_xhttp_path':'/trojan-xhttp','trojan_grpc_path':'/trojan-grpc','trojan_httpupgrade_path':'/trojan-upgrade','sub_path':SUB_PATH,
-              'panel_title':'vpnstan','support_url':'','dns_server':'1.1.1.1,1.0.0.1','dns_profile':'cloudflare','wg_endpoint':'','wg_server_public_key':'','announce':'اشتراک vpnstan — برای دریافت آخرین کانفیگ، لینک اشتراک را به‌روزرسانی کنید.','update_interval':'1','theme':'dark'}
+              'panel_title':'vpnstan','support_url':'','dns_server':'1.1.1.1,1.0.0.1','dns_profile':'cloudflare','wg_endpoint':'','wg_server_public_key':'','announce':'اشتراک vpnstan — برای دریافت آخرین کانفیگ، لینک اشتراک را به‌روزرسانی کنید.','update_interval':'1','theme':'dark','telegram_token':'','telegram_admin_id':'','telegram_enabled':'0','telegram_plans':json.dumps([{'name':'50GB / 30 روز','gb':50,'days':30,'price':''}],ensure_ascii=False),'telegram_payment_text':'پس از پرداخت، روی «پرداخت کردم» بزنید تا سفارش برای ادمین ارسال شود. پرداخت به‌صورت دستی بررسی می‌شود.'}
     for k,v in defaults.items(): c.execute('INSERT OR IGNORE INTO settings(k,v) VALUES(?,?)',(k,v))
     c.commit(); c.close()
 
@@ -466,6 +470,142 @@ def qr_svg(h,sid):
         h.send_response(200); h.send_header('Content-Type','image/svg+xml'); h.send_header('Cache-Control','no-store'); h.send_header('Content-Length',str(len(raw))); h.end_headers(); h.wfile.write(raw)
     except Exception as e: send(h,500,{'error':str(e)})
 
+
+# ---------------- Telegram sales bot ----------------
+TG_LOCK=threading.RLock()
+TG_STOP=threading.Event()
+
+def tg_api(method, payload=None, timeout=35):
+    st=settings(); token=(st.get('telegram_token') or '').strip()
+    if not token: raise RuntimeError('توکن ربات تلگرام تنظیم نشده است')
+    url=f'https://api.telegram.org/bot{token}/{method}'
+    data=json.dumps(payload or {}, ensure_ascii=False).encode('utf-8')
+    req=urllib.request.Request(url,data=data,headers={'Content-Type':'application/json','User-Agent':'VPNSTAN/26'})
+    with urllib.request.urlopen(req,timeout=timeout) as r:
+        out=json.loads(r.read().decode('utf-8'))
+    if not out.get('ok'): raise RuntimeError(str(out.get('description') or 'Telegram API error'))
+    return out.get('result')
+
+def tg_send(chat_id,text,keyboard=None):
+    payload={'chat_id':chat_id,'text':text,'parse_mode':'HTML','disable_web_page_preview':True}
+    if keyboard: payload['reply_markup']={'inline_keyboard':keyboard}
+    return tg_api('sendMessage',payload,25)
+
+def tg_edit(chat_id,message_id,text,keyboard=None):
+    payload={'chat_id':chat_id,'message_id':message_id,'text':text,'parse_mode':'HTML','disable_web_page_preview':True}
+    if keyboard: payload['reply_markup']={'inline_keyboard':keyboard}
+    return tg_api('editMessageText',payload,25)
+
+def tg_answer(cb_id,text=''):
+    try: return tg_api('answerCallbackQuery',{'callback_query_id':cb_id,'text':text,'show_alert':False},15)
+    except Exception: return None
+
+def tg_plans():
+    try:
+        arr=json.loads(settings().get('telegram_plans','[]') or '[]')
+        return [x for x in arr if isinstance(x,dict) and float(x.get('gb',0))>0 and int(x.get('days',0))>0][:20]
+    except Exception: return []
+
+def tg_plan_keyboard():
+    rows=[]
+    for i,p in enumerate(tg_plans()):
+        price=f" · {p.get('price')}" if str(p.get('price','')).strip() else ''
+        rows.append([{'text':f"{p.get('name','پلن')} — {p.get('gb')}GB / {p.get('days')} روز{price}",'callback_data':f'plan:{i}'}])
+    return rows
+
+def tg_admin_id():
+    try: return int(str(settings().get('telegram_admin_id','')).strip())
+    except Exception: return 0
+
+def tg_create_client(order):
+    now=int(time.time()); sub_id=secrets.token_urlsafe(18); cuuid=str(uuid.uuid4()); name=f"TG-{order['id']}-{order['telegram_user_id']}"
+    st=settings(); host=clean_host(st.get('node_host')) or clean_host(os.environ.get('RAILWAY_PUBLIC_DOMAIN'))
+    dns_server=st.get('dns_server','')
+    c=db(); c.execute('''INSERT INTO clients(name,uuid,sub_id,gb,days,created_at,expiry_at,protocol,transport,dns_server,wg_private_key,wg_address,dns_token,panel_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0)''',(name,cuuid,sub_id,float(order['gb']),int(order['days']),now,now+int(order['days'])*86400,'vless','ws',dns_server,'','10.66.0.2/32',''))
+    cid=c.execute('SELECT last_insert_rowid()').fetchone()[0]; c.commit(); row=c.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone(); c.close(); restart_xray()
+    sub=f'https://{host}/{st.get("sub_path","sub").strip("/")}/{sub_id}' if host else f'/{st.get("sub_path","sub").strip("/")}/{sub_id}'
+    return cid,sub,row
+
+def tg_handle_callback(cb):
+    data=str(cb.get('data','')); uid=int(cb.get('from',{}).get('id',0)); chat_id=cb.get('message',{}).get('chat',{}).get('id',uid); mid=cb.get('message',{}).get('message_id')
+    admin=tg_admin_id()
+    if data=='plans':
+        tg_answer(cb.get('id','')); tg_edit(chat_id,mid,'<b>پلن‌های فروش VPNSTAN</b>\nیک پلن را انتخاب کنید:',tg_plan_keyboard()); return
+    if data=='myorders':
+        c=db(); rows=c.execute('SELECT * FROM telegram_orders WHERE telegram_user_id=? ORDER BY id DESC LIMIT 10',(uid,)).fetchall(); c.close(); labels={'awaiting_payment':'منتظر پرداخت','pending_admin':'منتظر تأیید','approved':'تأیید شده','rejected':'رد شده','created':'ثبت شده'}; lines=['<b>سفارش‌های شما</b>']; lines += [f"#{r['id']} · {html.escape(r['plan_name'])} · {labels.get(r['status'],r['status'])}" for r in rows]; tg_answer(cb.get('id','')); tg_edit(chat_id,mid,'\n'.join(lines) if rows else 'هنوز سفارشی ندارید.',[[{'text':'🛒 پلن‌ها','callback_data':'plans'}]]); return
+    if data.startswith('plan:'):
+        try:i=int(data.split(':',1)[1]); plan=tg_plans()[i]
+        except Exception: tg_answer(cb.get('id',''),'پلن پیدا نشد'); return
+        username=cb.get('from',{}).get('username') or cb.get('from',{}).get('first_name') or str(uid)
+        c=db(); cur=c.execute('INSERT INTO telegram_orders(telegram_user_id,username,plan_name,gb,days,price,status,created_at) VALUES(?,?,?,?,?,?,?,?)',(uid,username,str(plan.get('name','VPNSTAN')),float(plan['gb']),int(plan['days']),str(plan.get('price','')),'awaiting_payment',int(time.time()))); oid=cur.lastrowid; c.commit(); c.close()
+        price=f"\n💳 قیمت: <b>{html.escape(str(plan.get('price','')))}</b>" if str(plan.get('price','')).strip() else ''
+        pay=html.escape(settings().get('telegram_payment_text',''))
+        tg_answer(cb.get('id',''),'سفارش ثبت شد')
+        tg_edit(chat_id,mid,f"<b>سفارش #{oid}</b>\nپلن: {html.escape(str(plan.get('name','')))}\nحجم: {plan['gb']} GB\nاعتبار: {plan['days']} روز{price}\n\n{pay}",[[{'text':'✅ پرداخت کردم','callback_data':f'paid:{oid}'}],[{'text':'🔙 بازگشت به پلن‌ها','callback_data':'plans'}]])
+        return
+    if data.startswith('paid:'):
+        try: oid=int(data.split(':',1)[1])
+        except: tg_answer(cb.get('id',''),'سفارش نامعتبر'); return
+        c=db(); order=c.execute('SELECT * FROM telegram_orders WHERE id=?',(oid,)).fetchone()
+        if not order or int(order['telegram_user_id'])!=uid: c.close(); tg_answer(cb.get('id',''),'سفارش پیدا نشد'); return
+        if order['status'] not in ('awaiting_payment','created'): c.close(); tg_answer(cb.get('id',''),'این سفارش قبلاً بررسی شده است'); return
+        c.execute("UPDATE telegram_orders SET status='pending_admin' WHERE id=?",(oid,)); c.commit(); c.close(); tg_answer(cb.get('id',''),'برای ادمین ارسال شد')
+        tg_send(chat_id,f"<b>سفارش #{oid}</b> ثبت شد و منتظر تأیید ادمین است.")
+        if admin:
+            uname=html.escape(order['username'] or str(uid)); price=html.escape(order['price'] or 'بدون قیمت')
+            tg_send(admin,f"<b>سفارش جدید #{oid}</b>\nکاربر: @{uname}\nTelegram ID: <code>{uid}</code>\nپلن: {html.escape(order['plan_name'])}\nحجم: {order['gb']} GB\nاعتبار: {order['days']} روز\nقیمت: {price}",[[{'text':'✅ تأیید و ساخت کانفیگ','callback_data':f'approve:{oid}'},{'text':'❌ رد سفارش','callback_data':f'reject:{oid}'}]])
+        return
+    if data.startswith('approve:') or data.startswith('reject:'):
+        if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
+        action,raw=data.split(':',1)
+        try: oid=int(raw)
+        except: tg_answer(cb.get('id',''),'شناسه نامعتبر'); return
+        c=db(); order=c.execute('SELECT * FROM telegram_orders WHERE id=?',(oid,)).fetchone(); c.close()
+        if not order: tg_answer(cb.get('id',''),'سفارش پیدا نشد'); return
+        if action=='reject':
+            c=db(); c.execute("UPDATE telegram_orders SET status='rejected' WHERE id=?",(oid,)); c.commit(); c.close(); tg_send(order['telegram_user_id'],f'❌ سفارش <b>#{oid}</b> رد شد. برای پیگیری با پشتیبانی تماس بگیرید.'); tg_answer(cb.get('id',''),'سفارش رد شد'); return
+        if order['status'] not in ('pending_admin','awaiting_payment'): tg_answer(cb.get('id',''),'این سفارش قبلاً پردازش شده است'); return
+        try:
+            cid,sub,row=tg_create_client(order)
+            c=db(); c.execute("UPDATE telegram_orders SET status='approved',client_id=? WHERE id=?",(cid,oid)); c.commit(); c.close()
+            tg_send(order['telegram_user_id'],f"<b>✅ سفارش #{oid} تأیید شد</b>\n\nنام کانفیگ: <code>{html.escape(row['name'])}</code>\nحجم: {order['gb']} GB\nاعتبار: {order['days']} روز\n\n<b>Subscription:</b>\n<code>{html.escape(sub)}</code>",[[{'text':'📋 کپی لینک','url':sub}]] if sub.startswith('http') else None)
+            tg_answer(cb.get('id',''),'کانفیگ ساخته شد')
+        except Exception as e:
+            tg_answer(cb.get('id',''),'ساخت کانفیگ ناموفق بود')
+            tg_send(admin,f'⚠️ خطا در ساخت سفارش #{oid}: <code>{html.escape(str(e))}</code>')
+
+def tg_handle_message(msg):
+    chat=msg.get('chat',{}); uid=int(chat.get('id',0)); text=str(msg.get('text','')).strip()
+    if not text:return
+    if text.startswith('/start'):
+        tg_send(uid,'<b>به ربات فروش VPNSTAN خوش آمدید.</b>\nاز منوی زیر پلن موردنظر را انتخاب کنید.',[[{'text':'🛒 مشاهده پلن‌ها','callback_data':'plans'}],[{'text':'📦 سفارش‌های من','callback_data':'myorders'}]])
+    elif text.startswith('/plans'):
+        tg_send(uid,'<b>پلن‌های فروش VPNSTAN</b>\nیک پلن را انتخاب کنید:',tg_plan_keyboard())
+    elif text.startswith('/my') or text.startswith('/orders'):
+        c=db(); rows=c.execute('SELECT * FROM telegram_orders WHERE telegram_user_id=? ORDER BY id DESC LIMIT 10',(uid,)).fetchall(); c.close()
+        if not rows: tg_send(uid,'هنوز سفارشی ندارید.'); return
+        lines=['<b>سفارش‌های شما</b>']
+        labels={'awaiting_payment':'منتظر پرداخت','pending_admin':'منتظر تأیید','approved':'تأیید شده','rejected':'رد شده','created':'ثبت شده'}
+        for r in rows: lines.append(f"#{r['id']} · {html.escape(r['plan_name'])} · {labels.get(r['status'],r['status'])}")
+        tg_send(uid,'\n'.join(lines),[[{'text':'🛒 پلن‌ها','callback_data':'plans'}]])
+
+def telegram_bot_loop():
+    offset=0
+    while not TG_STOP.is_set():
+        try:
+            st=settings(); token=(st.get('telegram_token') or '').strip(); enabled=st.get('telegram_enabled','0')=='1'
+            if not token or not enabled: time.sleep(3); continue
+            # Drop pending updates when bot is first enabled only through an explicit fresh offset.
+            updates=tg_api('getUpdates',{'offset':offset,'timeout':20,'allowed_updates':['message','callback_query']},30)
+            for u in updates or []:
+                offset=max(offset,int(u.get('update_id',0))+1)
+                try:
+                    if u.get('callback_query'): tg_handle_callback(u['callback_query'])
+                    elif u.get('message'): tg_handle_message(u['message'])
+                except Exception as e: print('TELEGRAM UPDATE ERROR:',e,flush=True)
+        except Exception as e:
+            print('TELEGRAM BOT:',e,flush=True); time.sleep(5)
+
 class H(BaseHTTPRequestHandler):
     def log_message(self,fmt,*a): print(fmt%a,flush=True)
     def do_HEAD(self):
@@ -588,6 +728,36 @@ class H(BaseHTTPRequestHandler):
             domain=os.environ.get('RAILWAY_TCP_PROXY_DOMAIN','').strip()
             port=os.environ.get('RAILWAY_TCP_PROXY_PORT','').strip()
             return send(self,200,{'success':True,'enabled':DNS_TCP_ENABLED,'internalPort':DNS_TCP_PORT,'tcpHost':domain,'tcpPort':port,'ready':bool(domain and port),'message':'برای DNSChanger باید TCP Proxy ریلیوی را روی پورت داخلی 5354 فعال کنید. سپس Host و Port نمایش داده می‌شود.'})
+        if p=='/api/telegram/status':
+            if not is_admin(self): return send(self,403,{'success':False,'msg':'فقط ادمین دسترسی دارد'})
+            st=settings(); token=st.get('telegram_token','').strip(); admin_id=st.get('telegram_admin_id','').strip(); enabled=st.get('telegram_enabled','0')=='1'
+            bot=None; err=''
+            if token:
+                try: bot=tg_api('getMe',{},10)
+                except Exception as e: err=str(e)
+            return send(self,200,{'success':True,'enabled':enabled,'configured':bool(token and admin_id),'connected':bool(bot),'bot':bot,'error':err,'adminId':admin_id,'plans':tg_plans()})
+        if p=='/api/telegram/save':
+            if not is_admin(self): return send(self,403,{'success':False,'msg':'فقط ادمین دسترسی دارد'})
+            try:d=body(self); token=str(d.get('token','')).strip(); admin_id=str(d.get('adminId','')).strip(); enabled=bool(d.get('enabled')); plans=d.get('plans') or []; payment=str(d.get('paymentText','')).strip()
+            except:return send(self,400,{'success':False,'msg':'درخواست نامعتبر'})
+            if enabled and (not token or not admin_id): return send(self,400,{'success':False,'msg':'توکن ربات و آیدی عددی ادمین الزامی است'})
+            if enabled:
+                try:
+                    int(admin_id); bot=tg_api('getMe',{},10)
+                except Exception as e:return send(self,400,{'success':False,'msg':'توکن ربات معتبر نیست: '+str(e)})
+            clean=[]
+            for x in plans[:20]:
+                try:
+                    name=str(x.get('name','')).strip(); gb=float(x.get('gb',0)); days=int(x.get('days',0)); price=str(x.get('price','')).strip()
+                    if name and gb>0 and days>0: clean.append({'name':name,'gb':gb,'days':days,'price':price})
+                except: pass
+            if not clean: return send(self,400,{'success':False,'msg':'حداقل یک پلن معتبر وارد کنید'})
+            set_setting('telegram_token',token); set_setting('telegram_admin_id',admin_id); set_setting('telegram_enabled','1' if enabled else '0'); set_setting('telegram_plans',json.dumps(clean,ensure_ascii=False)); set_setting('telegram_payment_text',payment)
+            return send(self,200,{'success':True,'enabled':enabled,'connected':bool(enabled),'bot':bot if enabled else None,'plans':clean})
+        if p=='/api/telegram/test':
+            if not is_admin(self): return send(self,403,{'success':False,'msg':'فقط ادمین دسترسی دارد'})
+            try:r=tg_api('getMe',{},10); return send(self,200,{'success':True,'bot':r})
+            except Exception as e:return send(self,400,{'success':False,'msg':str(e)})
         if p=='/api/settings':
             if not authed(self): return send(self,401,{'success':False,'msg':'نیاز به ورود دارید'})
             if not has_permission(self,'settings_view'): return send(self,403,{'success':False,'msg':'دسترسی تنظیمات برای این پنل فعال نیست'})
@@ -702,6 +872,36 @@ class H(BaseHTTPRequestHandler):
             domain=os.environ.get('RAILWAY_TCP_PROXY_DOMAIN','').strip()
             port=os.environ.get('RAILWAY_TCP_PROXY_PORT','').strip()
             return send(self,200,{'success':True,'enabled':DNS_TCP_ENABLED,'internalPort':DNS_TCP_PORT,'tcpHost':domain,'tcpPort':port,'ready':bool(domain and port),'message':'برای DNSChanger باید TCP Proxy ریلیوی را روی پورت داخلی 5354 فعال کنید. سپس Host و Port نمایش داده می‌شود.'})
+        if p=='/api/telegram/status':
+            if not is_admin(self): return send(self,403,{'success':False,'msg':'فقط ادمین دسترسی دارد'})
+            st=settings(); token=st.get('telegram_token','').strip(); admin_id=st.get('telegram_admin_id','').strip(); enabled=st.get('telegram_enabled','0')=='1'
+            bot=None; err=''
+            if token:
+                try: bot=tg_api('getMe',{},10)
+                except Exception as e: err=str(e)
+            return send(self,200,{'success':True,'enabled':enabled,'configured':bool(token and admin_id),'connected':bool(bot),'bot':bot,'error':err,'adminId':admin_id,'plans':tg_plans()})
+        if p=='/api/telegram/save':
+            if not is_admin(self): return send(self,403,{'success':False,'msg':'فقط ادمین دسترسی دارد'})
+            try:d=body(self); token=str(d.get('token','')).strip(); admin_id=str(d.get('adminId','')).strip(); enabled=bool(d.get('enabled')); plans=d.get('plans') or []; payment=str(d.get('paymentText','')).strip()
+            except:return send(self,400,{'success':False,'msg':'درخواست نامعتبر'})
+            if enabled and (not token or not admin_id): return send(self,400,{'success':False,'msg':'توکن ربات و آیدی عددی ادمین الزامی است'})
+            if enabled:
+                try:
+                    int(admin_id); bot=tg_api('getMe',{},10)
+                except Exception as e:return send(self,400,{'success':False,'msg':'توکن ربات معتبر نیست: '+str(e)})
+            clean=[]
+            for x in plans[:20]:
+                try:
+                    name=str(x.get('name','')).strip(); gb=float(x.get('gb',0)); days=int(x.get('days',0)); price=str(x.get('price','')).strip()
+                    if name and gb>0 and days>0: clean.append({'name':name,'gb':gb,'days':days,'price':price})
+                except: pass
+            if not clean: return send(self,400,{'success':False,'msg':'حداقل یک پلن معتبر وارد کنید'})
+            set_setting('telegram_token',token); set_setting('telegram_admin_id',admin_id); set_setting('telegram_enabled','1' if enabled else '0'); set_setting('telegram_plans',json.dumps(clean,ensure_ascii=False)); set_setting('telegram_payment_text',payment)
+            return send(self,200,{'success':True,'enabled':enabled,'connected':bool(enabled),'bot':bot if enabled else None,'plans':clean})
+        if p=='/api/telegram/test':
+            if not is_admin(self): return send(self,403,{'success':False,'msg':'فقط ادمین دسترسی دارد'})
+            try:r=tg_api('getMe',{},10); return send(self,200,{'success':True,'bot':r})
+            except Exception as e:return send(self,400,{'success':False,'msg':str(e)})
         if p=='/api/settings':
             if not has_permission(self,'settings_view'): return send(self,403,{'success':False,'msg':'دسترسی تنظیمات برای این پنل فعال نیست'})
             try:d=body(self); allowed={'node_host','node_port','ws_path','vmess_path','xhttp_path','grpc_service','grpc_path','httpupgrade_path','vmess_xhttp_path','vmess_grpc_path','vmess_httpupgrade_path','trojan_ws_path','trojan_xhttp_path','trojan_grpc_path','trojan_httpupgrade_path','sub_path','panel_title','support_url','announce','update_interval','wg_endpoint','wg_server_public_key','dns_server','dns_profile','theme'}
@@ -773,4 +973,4 @@ class H(BaseHTTPRequestHandler):
         raw=open(f,'rb').read(); self.send_response(200); self.send_header('Content-Type',mime); self.send_header('Content-Length',str(len(raw))); self.send_header('Cache-Control','no-store, no-cache, must-revalidate'); self.send_header('Pragma','no-cache'); self.end_headers(); self.wfile.write(raw)
 
 if __name__=='__main__':
-    init_db(); restart_xray(); threading.Thread(target=collector_loop,daemon=True).start(); threading.Thread(target=dns_tcp_server,daemon=True).start(); print(f'vpnstan panel listening on 127.0.0.1:{PANEL_PORT}',flush=True); ThreadingHTTPServer(('127.0.0.1',PANEL_PORT),H).serve_forever()
+    init_db(); restart_xray(); threading.Thread(target=collector_loop,daemon=True).start(); threading.Thread(target=dns_tcp_server,daemon=True).start(); threading.Thread(target=telegram_bot_loop,daemon=True).start(); print(f'vpnstan panel listening on 127.0.0.1:{PANEL_PORT}',flush=True); ThreadingHTTPServer(('127.0.0.1',PANEL_PORT),H).serve_forever()
