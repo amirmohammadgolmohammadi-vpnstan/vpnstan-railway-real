@@ -700,6 +700,19 @@ def tg_handle_callback(cb):
 def tg_handle_message(msg):
     chat=msg.get('chat',{}); uid=int(chat.get('id',0)); text=str(msg.get('text','')).strip()
     if not text:return
+    if text.startswith('/claimadmin'):
+        # First private user can claim admin only when no admin ID has been configured yet.
+        current=tg_admin_id()
+        if current:
+            if uid==current: tg_send(uid,'✅ شما از قبل ادمین ربات هستید.',[[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]])
+            else: tg_send(uid,'⛔ ادمین ربات قبلاً تعیین شده است.')
+            return
+        if str(chat.get('type',''))!='private':
+            tg_send(uid,'این دستور را در گفت‌وگوی خصوصی ربات ارسال کنید.')
+            return
+        set_setting('telegram_admin_id',str(uid)); tg_user(uid,msg)
+        tg_send(uid,f'✅ این حساب به‌عنوان ادمین ربات ثبت شد.\nTelegram ID: <code>{uid}</code>',tg_admin_keyboard())
+        return
     if text.startswith('/start'):
         tg_user(uid,msg); kb=tg_main_keyboard(uid);
         if uid==tg_admin_id(): kb.append([{'text':'🛠 مدیریت ربات','callback_data':'admin'}])
@@ -914,24 +927,26 @@ class H(BaseHTTPRequestHandler):
             if token:
                 try: bot=tg_api('getMe',{},10)
                 except Exception as e: err=str(e)
-            return send(self,200,{'success':True,'enabled':enabled,'configured':bool(token and admin_id),'connected':bool(bot),'bot':bot,'error':err,'adminId':admin_id,'plans':tg_plans()})
+            return send(self,200,{'success':True,'enabled':enabled,'configured':bool(token),'connected':bool(bot),'bot':bot,'botId':(bot or {}).get('id') if bot else None,'error':err,'adminId':admin_id,'adminConfigured':bool(admin_id),'plans':tg_plans()})
         if p=='/api/telegram/save':
             if not is_admin(self): return send(self,403,{'success':False,'msg':'فقط ادمین دسترسی دارد'})
-            try:d=body(self); token=str(d.get('token','')).strip(); admin_id=str(d.get('adminId','')).strip(); enabled=bool(d.get('enabled')); plans=d.get('plans') or []; payment=str(d.get('paymentText','')).strip()
+            try:d=body(self); token=str(d.get('token','')).strip(); admin_id=str(d.get('adminId','')).strip(); enabled=bool(d.get('enabled'))
             except:return send(self,400,{'success':False,'msg':'درخواست نامعتبر'})
-            if enabled and (not token or not admin_id): return send(self,400,{'success':False,'msg':'توکن ربات و آیدی عددی ادمین الزامی است'})
+            # The token field is intentionally optional on subsequent saves so loading the page never erases it.
+            if not token: token=settings().get('telegram_token','').strip()
+            if not admin_id: admin_id=settings().get('telegram_admin_id','').strip()
+            bot=None
             if enabled:
-                try:
-                    int(admin_id); bot=tg_api('getMe',{},10)
+                if not token: return send(self,400,{'success':False,'msg':'توکن BotFather را وارد کنید'})
+                try: bot=tg_api('getMe',{},10)
                 except Exception as e:return send(self,400,{'success':False,'msg':'توکن ربات معتبر نیست: '+str(e)})
-            clean=[]
-            for x in plans[:20]:
-                try:
-                    name=str(x.get('name','')).strip(); gb=float(x.get('gb',0)); days=int(x.get('days',0)); price=str(x.get('price','')).strip()
-                    if name and gb>0 and days>0: clean.append({'name':name,'gb':gb,'days':days,'price':price})
-                except: pass
-            if not clean: return send(self,400,{'success':False,'msg':'حداقل یک پلن معتبر وارد کنید'})
-            set_setting('telegram_token',token); set_setting('telegram_admin_id',admin_id); set_setting('telegram_enabled','1' if enabled else '0'); set_setting('telegram_plans',json.dumps(clean,ensure_ascii=False)); set_setting('telegram_payment_text',payment)
+                if admin_id:
+                    try: int(admin_id)
+                    except: return send(self,400,{'success':False,'msg':'آیدی ادمین باید عددی باشد'})
+            # Plans are managed ONLY inside Telegram. Preserve any existing plans and allow zero plans at connection time.
+            payment=str(d.get('paymentText','')).strip()
+            set_setting('telegram_token',token); set_setting('telegram_admin_id',admin_id); set_setting('telegram_enabled','1' if enabled else '0')
+            if payment: set_setting('telegram_payment_text',payment)
             set_setting('telegram_card_number',str(d.get('cardNumber','')).strip().replace(' ',''))
             set_setting('telegram_card_name',str(d.get('cardName','')).strip())
             set_setting('telegram_welcome_text',str(d.get('welcomeText','به فروشگاه VPNSTAN خوش آمدید.')).strip() or 'به فروشگاه VPNSTAN خوش آمدید.')
@@ -944,7 +959,7 @@ class H(BaseHTTPRequestHandler):
             except: set_setting('telegram_trial_gb','1')
             try: set_setting('telegram_trial_days',max(1,int(d.get('trialDays',1))))
             except: set_setting('telegram_trial_days','1')
-            return send(self,200,{'success':True,'enabled':enabled,'connected':bool(enabled),'bot':bot if enabled else None,'plans':clean})
+            return send(self,200,{'success':True,'enabled':enabled,'connected':bool(bot),'bot':bot,'botId':(bot or {}).get('id') if bot else None,'adminId':admin_id,'plans':tg_plans()})
         if p=='/api/telegram/test':
             if not is_admin(self): return send(self,403,{'success':False,'msg':'فقط ادمین دسترسی دارد'})
             try:r=tg_api('getMe',{},10); return send(self,200,{'success':True,'bot':r})
@@ -1070,40 +1085,26 @@ class H(BaseHTTPRequestHandler):
             if token:
                 try: bot=tg_api('getMe',{},10)
                 except Exception as e: err=str(e)
-            return send(self,200,{'success':True,'enabled':enabled,'configured':bool(token and admin_id),'connected':bool(bot),'bot':bot,'error':err,'adminId':admin_id,'plans':tg_plans()})
+            return send(self,200,{'success':True,'enabled':enabled,'configured':bool(token),'connected':bool(bot),'bot':bot,'botId':(bot or {}).get('id') if bot else None,'error':err,'adminId':admin_id,'adminConfigured':bool(admin_id),'plans':tg_plans()})
         if p=='/api/telegram/save':
             if not is_admin(self): return send(self,403,{'success':False,'msg':'فقط ادمین دسترسی دارد'})
-            try:d=body(self); token=str(d.get('token','')).strip(); admin_id=str(d.get('adminId','')).strip(); enabled=bool(d.get('enabled')); plans=d.get('plans') or []; payment=str(d.get('paymentText','')).strip()
+            try:d=body(self); token=str(d.get('token','')).strip(); admin_id=str(d.get('adminId','')).strip(); enabled=bool(d.get('enabled'))
             except:return send(self,400,{'success':False,'msg':'درخواست نامعتبر'})
-            if enabled and (not token or not admin_id): return send(self,400,{'success':False,'msg':'توکن ربات و آیدی عددی ادمین الزامی است'})
+            if not token: token=settings().get('telegram_token','').strip()
+            if not admin_id: admin_id=settings().get('telegram_admin_id','').strip()
+            bot=None
             if enabled:
-                try:
-                    int(admin_id); bot=tg_api('getMe',{},10)
+                if not token: return send(self,400,{'success':False,'msg':'توکن BotFather را وارد کنید'})
+                try: bot=tg_api('getMe',{},10)
                 except Exception as e:return send(self,400,{'success':False,'msg':'توکن ربات معتبر نیست: '+str(e)})
-            clean=[]
-            for x in plans[:20]:
-                try:
-                    name=str(x.get('name','')).strip(); gb=float(x.get('gb',0)); days=int(x.get('days',0)); price=str(x.get('price','')).strip()
-                    if name and gb>0 and days>0: clean.append({'name':name,'gb':gb,'days':days,'price':price})
-                except: pass
-            if not clean: return send(self,400,{'success':False,'msg':'حداقل یک پلن معتبر وارد کنید'})
-            set_setting('telegram_token',token); set_setting('telegram_admin_id',admin_id); set_setting('telegram_enabled','1' if enabled else '0'); set_setting('telegram_plans',json.dumps(clean,ensure_ascii=False)); set_setting('telegram_payment_text',payment)
-            set_setting('telegram_card_number',str(d.get('cardNumber','')).strip().replace(' ',''))
-            set_setting('telegram_card_name',str(d.get('cardName','')).strip())
-            set_setting('telegram_welcome_text',str(d.get('welcomeText','به فروشگاه VPNSTAN خوش آمدید.')).strip() or 'به فروشگاه VPNSTAN خوش آمدید.')
-            set_setting('telegram_support_text',str(d.get('supportText','برای پشتیبانی پیام خود را ارسال کنید.')).strip() or 'برای پشتیبانی پیام خود را ارسال کنید.')
-            set_setting('telegram_mandatory_channel',str(d.get('mandatoryChannel','')).strip())
-            try: set_setting('telegram_referral_reward',max(0,float(d.get('referralReward',1))))
-            except: set_setting('telegram_referral_reward','1')
-            set_setting('telegram_trial_enabled','1' if bool(d.get('trialEnabled',True)) else '0')
-            try: set_setting('telegram_trial_gb',max(0.1,float(d.get('trialGb',1))))
-            except: set_setting('telegram_trial_gb','1')
-            try: set_setting('telegram_trial_days',max(1,int(d.get('trialDays',1))))
-            except: set_setting('telegram_trial_days','1')
-            return send(self,200,{'success':True,'enabled':enabled,'connected':bool(enabled),'bot':bot if enabled else None,'plans':clean})
+                if admin_id:
+                    try: int(admin_id)
+                    except: return send(self,400,{'success':False,'msg':'آیدی ادمین باید عددی باشد'})
+            set_setting('telegram_token',token); set_setting('telegram_admin_id',admin_id); set_setting('telegram_enabled','1' if enabled else '0')
+            return send(self,200,{'success':True,'enabled':enabled,'connected':bool(bot),'bot':bot,'botId':(bot or {}).get('id') if bot else None,'adminId':admin_id,'plans':tg_plans()})
         if p=='/api/telegram/test':
             if not is_admin(self): return send(self,403,{'success':False,'msg':'فقط ادمین دسترسی دارد'})
-            try:r=tg_api('getMe',{},10); return send(self,200,{'success':True,'bot':r})
+            try:r=tg_api('getMe',{},10); return send(self,200,{'success':True,'bot':r,'botId':r.get('id')})
             except Exception as e:return send(self,400,{'success':False,'msg':str(e)})
         if p=='/api/settings':
             if not has_permission(self,'settings_view'): return send(self,403,{'success':False,'msg':'دسترسی تنظیمات برای این پنل فعال نیست'})
