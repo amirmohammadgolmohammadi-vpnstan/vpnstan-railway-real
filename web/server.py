@@ -300,6 +300,14 @@ def collect_xray_stats():
                     matches=re.findall(r'"value"\s*:\s*"?(\d+)"?',txt)
                     if matches:
                         one['upload' if kind=='uplink' else 'download']=int(matches[-1])
+                    else:
+                        # Some Xray builds return the value as a protobuf-ish
+                        # field without JSON formatting. Extract the last number
+                        # only when the requested record name is present.
+                        if f'user>>>{email}>>>traffic>>>{kind}' in txt:
+                            nums=re.findall(r'(?<![A-Za-z])\d+(?![A-Za-z])',txt)
+                            if nums:
+                                one['upload' if kind=='uplink' else 'download']=int(nums[-1])
                 elif email not in stats:
                     errors.append(f'{email}/{kind}: '+q.stderr.decode('utf-8','replace')[-500:])
             except Exception as e:
@@ -381,7 +389,7 @@ def write_xray_config():
             elif transport=='httpupgrade': stream['httpupgradeSettings']={'path':path}
             inbounds.append({'tag':f'{proto}-{transport}','listen':'127.0.0.1','port':port_map[(proto,transport)],'protocol':proto,'settings':settings_obj,'streamSettings':stream})
     api_port=int(XRAY_API_ADDR.rsplit(':',1)[-1])
-    api_inbound={'tag':'api','listen':'127.0.0.1','port':api_port,'protocol':'dokodemo-door','settings':{'address':'127.0.0.1'}}
+    api_inbound={'tag':'api','listen':'127.0.0.1','port':api_port,'protocol':'tunnel','settings':{'rewriteAddress':'127.0.0.1'}}
     cfg={'log':{'loglevel':'warning'},'api':{'tag':'api','services':['StatsService']},'stats':{},'policy':{'levels':{'0':{'statsUserUplink':True,'statsUserDownlink':True,'statsUserOnline':True}},'system':{'statsInboundUplink':True,'statsInboundDownlink':True,'statsOutboundUplink':True,'statsOutboundDownlink':True}},'inbounds':[api_inbound]+inbounds,'routing':{'rules':[{'type':'field','inboundTag':['api'],'outboundTag':'api'}]},'outbounds':[{'protocol':'freedom','tag':'direct'},{'protocol':'blackhole','tag':'block'}]}
     tmp=XRAY_CONFIG+'.tmp'
     with open(tmp,'w',encoding='utf-8') as f: json.dump(cfg,f,ensure_ascii=False,indent=2)
