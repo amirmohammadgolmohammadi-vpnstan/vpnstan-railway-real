@@ -24,6 +24,32 @@ DNS_TCP_ENABLED=os.environ.get('VPNSTAN_DNS_TCP_ENABLED','1').lower() in ('1','t
 SESSIONS={}
 XRAY_PROC=None
 SESSION_USERS={}
+BOT_API_KEY_ENV=os.environ.get('VPNSTAN_BOT_API_KEY','').strip()
+
+def bot_api_key():
+    # The key can be supplied through Railway/Cloudflare environment variables.
+    # Otherwise it is generated once and persisted in the VPNSTAN database.
+    env_key=BOT_API_KEY_ENV
+    if env_key:
+        return env_key
+    try:
+        c=db()
+        r=c.execute("SELECT v FROM settings WHERE k='bot_api_key'").fetchone()
+        c.close()
+        if r and str(r['v']).strip():
+            return str(r['v']).strip()
+    except Exception:
+        pass
+    return ''
+
+def bot_api_authed(h):
+    key=bot_api_key()
+    if not key:
+        return False
+    auth=h.headers.get('Authorization','').strip()
+    xkey=h.headers.get('X-API-Key','').strip()
+    supplied=auth[7:].strip() if auth.lower().startswith('bearer ') else xkey
+    return bool(supplied) and hmac.compare_digest(supplied,key)
 
 def client_ip(h):
     # Prefer proxy-aware headers used by Railway/Cloudflare, then the direct socket.
@@ -204,12 +230,16 @@ def init_db():
         import hashlib
         ph=hashlib.sha256(PASSWORD.encode()).hexdigest()
         c.execute('INSERT INTO panel_users(username,password_hash,role,enabled,created_at) VALUES(?,?,?,?,?)',(USERNAME,ph,'admin',1,int(time.time())))
-    defaults={'node_host':DEFAULT_HOST,'node_port':str(DEFAULT_PORT),'carrier_profile':'auto','ws_path':DEFAULT_PATH,'vmess_path':DEFAULT_VMESS_PATH,'xhttp_path':'/xhttp','grpc_service':'vpnstan','grpc_path':'/grpc','httpupgrade_path':'/upgrade','vmess_xhttp_path':'/vmess-xhttp','vmess_grpc_path':'/vmess-grpc','vmess_httpupgrade_path':'/vmess-upgrade','trojan_ws_path':'/trojan','trojan_xhttp_path':'/trojan-xhttp','trojan_grpc_path':'/trojan-grpc','trojan_httpupgrade_path':'/trojan-upgrade','sub_path':SUB_PATH,
+    defaults={'bot_api_key':'', 'node_host':DEFAULT_HOST,'node_port':str(DEFAULT_PORT),'carrier_profile':'auto','ws_path':DEFAULT_PATH,'vmess_path':DEFAULT_VMESS_PATH,'xhttp_path':'/xhttp','grpc_service':'vpnstan','grpc_path':'/grpc','httpupgrade_path':'/upgrade','vmess_xhttp_path':'/vmess-xhttp','vmess_grpc_path':'/vmess-grpc','vmess_httpupgrade_path':'/vmess-upgrade','trojan_ws_path':'/trojan','trojan_xhttp_path':'/trojan-xhttp','trojan_grpc_path':'/trojan-grpc','trojan_httpupgrade_path':'/trojan-upgrade','sub_path':SUB_PATH,
               'panel_title':'vpnstan','support_url':'','dns_server':'1.1.1.1,1.0.0.1','dns_profile':'cloudflare','wg_endpoint':'','wg_server_public_key':'','announce':'اشتراک vpnstan — برای دریافت آخرین کانفیگ، لینک اشتراک را به‌روزرسانی کنید.','update_interval':'1','theme':'dark','telegram_token':'','telegram_admin_id':'','telegram_enabled':'0','telegram_plans':json.dumps([{'name':'50GB / 30 روز','gb':50,'days':30,'price':''}],ensure_ascii=False),'telegram_payment_text':'پس از پرداخت، روی «پرداخت کردم» بزنید تا سفارش برای ادمین ارسال شود. پرداخت به‌صورت دستی بررسی می‌شود.',
               'telegram_trial_enabled':'1','telegram_trial_gb':'1','telegram_trial_days':'1','telegram_referral_reward':'1','telegram_support_text':'برای پشتیبانی پیام خود را ارسال کنید.','telegram_mandatory_channel':'','telegram_welcome_text':'به فروشگاه VPNSTAN خوش آمدید.','telegram_card_number':'','telegram_card_name':'',
               'telegram_renew_7_price':'30000','telegram_renew_30_price':'100000','telegram_renew_90_price':'250000',
               'telegram_add_5_price':'30000','telegram_add_10_price':'50000','telegram_add_25_price':'100000'}
     for k,v in defaults.items(): c.execute('INSERT OR IGNORE INTO settings(k,v) VALUES(?,?)',(k,v))
+    if not BOT_API_KEY_ENV:
+        r=c.execute("SELECT v FROM settings WHERE k='bot_api_key'").fetchone()
+        if not (r and str(r['v']).strip()):
+            c.execute("UPDATE settings SET v=? WHERE k='bot_api_key'",(secrets.token_urlsafe(36),))
     c.commit(); c.close()
 
 def hash_password(v):
@@ -1413,6 +1443,26 @@ class H(BaseHTTPRequestHandler):
                 elif proto=='vmess':
                     out.append({'protocol':'vmess','tag':r['name'],'settings':{'vnext':[{'address':host,'port':port,'users':[{'id':r['uuid'],'alterId':0,'security':'auto'}]}]},'streamSettings':{'network':'ws','security':'tls','tlsSettings':{'serverName':host},'wsSettings':{'path':s.get('vmess_path','/vmess')}}})
             return send(self,200,out)
+        if p=='/api/bot/info':
+            if not is_admin(self): return send(self,403,{'success':False,'msg':'فقط ادمین دسترسی دارد'})
+            key=bot_api_key()
+            return send(self,200,{'success':True,'configured':bool(key),'apiKey':key,'header':'Authorization: Bearer <API_KEY>','baseUrl':'https://'+self.headers.get('Host','')})
+        if p=='/api/server/status':
+            if not bot_api_authed(self): return send(self,401,{'success':False,'msg':'API key نامعتبر است'})
+            alive=bool(XRAY_PROC and XRAY_PROC.poll() is None)
+            return send(self,200,{'success':True,'status':'online' if alive else 'offline','xray':alive,'version':PANEL_VERSION,'panel':'VPNSTAN'})
+        if p=='/api/clients':
+            if not bot_api_authed(self): return send(self,401,{'success':False,'msg':'API key نامعتبر است'})
+            c=db(); rows=c.execute('SELECT * FROM clients ORDER BY id DESC').fetchall(); c.close()
+            return send(self,200,{'success':True,'clients':[client_data(self,r,settings()) for r in rows]})
+        if p=='/api/traffic':
+            if not bot_api_authed(self): return send(self,401,{'success':False,'msg':'API key نامعتبر است'})
+            c=db(); rows=c.execute('SELECT id,name,uuid,gb,expiry_at,enabled FROM clients ORDER BY id DESC').fetchall(); c.close()
+            items=[]; total_up=0; total_down=0
+            for r in rows:
+                tr=traffic_for(r['id']); total_up+=tr['upload']; total_down+=tr['download']
+                items.append({'id':r['id'],'name':r['name'],'uuid':r['uuid'],'upload':tr['upload'],'download':tr['download'],'used':tr['upload']+tr['download'],'total':int(float(r['gb'])*1024**3),'expiryAt':r['expiry_at'],'enabled':bool(r['enabled'])})
+            return send(self,200,{'success':True,'upload':total_up,'download':total_down,'used':total_up+total_down,'clients':items})
         if p=='/api/me':
             u=current_user(self)
             if not u: return send(self,200,{'authenticated':False,'user':None})
@@ -1581,6 +1631,63 @@ class H(BaseHTTPRequestHandler):
                 if x.strip().startswith('vpnstan_session='): SESSIONS.pop(x.strip().split('=',1)[1],None); SESSION_USERS.pop(x.strip().split('=',1)[1],None)
             return send(self,200,{'success':True},{'Set-Cookie':'vpnstan_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax'})
         if not authed(self): return send(self,401,{'success':False,'msg':'نیاز به ورود دارید'})
+        if p=='/api/bot/key/regenerate':
+            if not is_admin(self): return send(self,403,{'success':False,'msg':'فقط ادمین دسترسی دارد'})
+            if BOT_API_KEY_ENV:
+                return send(self,409,{'success':False,'msg':'API key از متغیر VPNSTAN_BOT_API_KEY می‌آید و از داخل پنل قابل تغییر نیست.'})
+            key=secrets.token_urlsafe(36)
+            set_setting('bot_api_key',key)
+            return send(self,200,{'success':True,'apiKey':key})
+        if p=='/api/clients/create':
+            if not bot_api_authed(self): return send(self,401,{'success':False,'msg':'API key نامعتبر است'})
+            try:
+                d=body(self); name=str(d.get('name','')).strip(); gb=float(d.get('gb',0)); days=int(d.get('days',0))
+                protocol=str(d.get('protocol','vless')).lower(); transport=str(d.get('transport','ws')).lower()
+                if not name or gb<=0 or days<=0 or len(name)>80: raise ValueError
+                if protocol not in ('vless','vmess','trojan','wireguard','dns'): raise ValueError
+                if transport not in ('ws','xhttp','grpc','httpupgrade'): raise ValueError
+                if protocol in ('wireguard','dns') and transport!='ws': raise ValueError
+            except Exception:
+                return send(self,400,{'success':False,'msg':'نام، حجم، مدت یا پروتکل نامعتبر است'})
+            now=int(time.time()); sub_id=secrets.token_urlsafe(18); cuuid=str(uuid.uuid4()); dns_token=secrets.token_urlsafe(24) if protocol=='dns' else ''
+            c=db(); c.execute('INSERT INTO clients(name,uuid,sub_id,gb,days,created_at,expiry_at,protocol,transport,dns_server,wg_private_key,wg_address,dns_token,panel_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0)',(name,cuuid,sub_id,gb,days,now,now+days*86400,protocol,transport,'internal' if protocol=='dns' else settings().get('dns_server',''),'','10.66.0.2/32',dns_token))
+            cid=c.execute('SELECT last_insert_rowid()').fetchone()[0]; c.commit(); row=c.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone(); c.close(); restart_xray()
+            return send(self,201,{'success':True,'client':client_data(self,row,settings())})
+        if p.startswith('/api/clients/') and p.endswith('/renew'):
+            if not bot_api_authed(self): return send(self,401,{'success':False,'msg':'API key نامعتبر است'})
+            try: cid=int(p.split('/')[3]); d=body(self); days=int(d.get('days',0))
+            except: return send(self,400,{'success':False,'msg':'درخواست نامعتبر'})
+            if days<=0 or days>3650:return send(self,400,{'success':False,'msg':'تعداد روز نامعتبر است'})
+            c=db(); r=c.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone()
+            if not r:c.close(); return send(self,404,{'success':False,'msg':'کلاینت پیدا نشد'})
+            newexp=max(int(r['expiry_at']),int(time.time()))+days*86400
+            c.execute('UPDATE clients SET expiry_at=?,enabled=1,days=days+? WHERE id=?',(newexp,days,cid)); c.commit(); row=c.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone(); c.close(); restart_xray()
+            return send(self,200,{'success':True,'client':client_data(self,row,settings())})
+        if p.startswith('/api/clients/') and p.endswith('/volume'):
+            if not bot_api_authed(self): return send(self,401,{'success':False,'msg':'API key نامعتبر است'})
+            try: cid=int(p.split('/')[3]); d=body(self); gb=float(d.get('gb',0))
+            except: return send(self,400,{'success':False,'msg':'درخواست نامعتبر'})
+            if gb<=0 or gb>100000:return send(self,400,{'success':False,'msg':'حجم نامعتبر است'})
+            c=db(); r=c.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone()
+            if not r:c.close(); return send(self,404,{'success':False,'msg':'کلاینت پیدا نشد'})
+            c.execute('UPDATE clients SET gb=gb+? WHERE id=?',(gb,cid)); c.commit(); row=c.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone(); c.close()
+            return send(self,200,{'success':True,'client':client_data(self,row,settings())})
+        if p.startswith('/api/clients/') and p.endswith('/toggle'):
+            if not bot_api_authed(self): return send(self,401,{'success':False,'msg':'API key نامعتبر است'})
+            try: cid=int(p.split('/')[3])
+            except: return send(self,400,{'success':False,'msg':'شناسه نامعتبر است'})
+            c=db(); r=c.execute('SELECT enabled FROM clients WHERE id=?',(cid,)).fetchone()
+            if not r:c.close(); return send(self,404,{'success':False,'msg':'کلاینت پیدا نشد'})
+            new=0 if r['enabled'] else 1; c.execute('UPDATE clients SET enabled=? WHERE id=?',(new,cid)); c.commit(); c.close(); restart_xray()
+            return send(self,200,{'success':True,'enabled':bool(new)})
+        if p.startswith('/api/clients/') and p.endswith('/delete'):
+            if not bot_api_authed(self): return send(self,401,{'success':False,'msg':'API key نامعتبر است'})
+            try: cid=int(p.split('/')[3])
+            except: return send(self,400,{'success':False,'msg':'شناسه نامعتبر است'})
+            c=db(); r=c.execute('SELECT id FROM clients WHERE id=?',(cid,)).fetchone()
+            if not r:c.close(); return send(self,404,{'success':False,'msg':'کلاینت پیدا نشد'})
+            c.execute('DELETE FROM traffic WHERE client_id=?',(cid,)); c.execute('DELETE FROM clients WHERE id=?',(cid,)); c.commit(); c.close(); restart_xray()
+            return send(self,200,{'success':True})
         if p=='/api/account/change':
             try:d=body(self); u=current_user(self); old=str(d.get('oldPassword','')); nu=str(d.get('username','')).strip(); np=str(d.get('newPassword',''))
             except:return send(self,400,{'success':False,'msg':'درخواست نامعتبر'})
