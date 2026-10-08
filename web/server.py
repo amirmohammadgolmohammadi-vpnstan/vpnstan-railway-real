@@ -293,6 +293,12 @@ def collect_xray_stats():
                      '-name='+f'user>>>{email}>>>traffic>>>{kind}'],
                     stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=3,check=False
                 )
+                if q.returncode != 0:
+                    q=subprocess.run(
+                        [XRAY_BIN,'api','stats','--server='+XRAY_API_ADDR,
+                         '--name='+f'user>>>{email}>>>traffic>>>{kind}'],
+                        stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=3,check=False
+                    )
                 if q.returncode==0:
                     txt=q.stdout.decode('utf-8','replace')
                     # Xray returns {"name":"...","value":"123"}.
@@ -388,9 +394,11 @@ def write_xray_config():
             elif transport=='grpc': stream['grpcSettings']={'serviceName':svc,'multiMode':False}
             elif transport=='httpupgrade': stream['httpupgradeSettings']={'path':path}
             inbounds.append({'tag':f'{proto}-{transport}','listen':'127.0.0.1','port':port_map[(proto,transport)],'protocol':proto,'settings':settings_obj,'streamSettings':stream})
-    api_port=int(XRAY_API_ADDR.rsplit(':',1)[-1])
-    api_inbound={'tag':'api','listen':'127.0.0.1','port':api_port,'protocol':'tunnel','settings':{'rewriteAddress':'127.0.0.1'}}
-    cfg={'log':{'loglevel':'warning'},'api':{'tag':'api','services':['StatsService']},'stats':{},'policy':{'levels':{'0':{'statsUserUplink':True,'statsUserDownlink':True,'statsUserOnline':True}},'system':{'statsInboundUplink':True,'statsInboundDownlink':True,'statsOutboundUplink':True,'statsOutboundDownlink':True}},'inbounds':[api_inbound]+inbounds,'routing':{'rules':[{'type':'field','inboundTag':['api'],'outboundTag':'api'}]},'outbounds':[{'protocol':'freedom','tag':'direct'},{'protocol':'blackhole','tag':'block'}]}
+    # Use Xray's simplified API mode. It binds StatsService directly to the
+    # local API socket, which avoids depending on a tunnel inbound/routing
+    # pair and makes `xray api statsquery` reliably available to the panel.
+    api_host, api_port = XRAY_API_ADDR.rsplit(':',1)
+    cfg={'log':{'loglevel':'warning'},'api':{'tag':'api','listen':api_host+':'+str(api_port),'services':['StatsService']},'stats':{},'policy':{'levels':{'0':{'statsUserUplink':True,'statsUserDownlink':True,'statsUserOnline':True}},'system':{'statsInboundUplink':True,'statsInboundDownlink':True,'statsOutboundUplink':True,'statsOutboundDownlink':True}},'inbounds':inbounds,'outbounds':[{'protocol':'freedom','tag':'direct'},{'protocol':'blackhole','tag':'block'}]}
     tmp=XRAY_CONFIG+'.tmp'
     with open(tmp,'w',encoding='utf-8') as f: json.dump(cfg,f,ensure_ascii=False,indent=2)
     os.replace(tmp,XRAY_CONFIG); return cfg
