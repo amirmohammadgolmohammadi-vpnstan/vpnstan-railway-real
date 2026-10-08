@@ -206,7 +206,7 @@ def init_db():
         c.execute('INSERT INTO panel_users(username,password_hash,role,enabled,created_at) VALUES(?,?,?,?,?)',(USERNAME,ph,'admin',1,int(time.time())))
     defaults={'node_host':DEFAULT_HOST,'node_port':str(DEFAULT_PORT),'ws_path':DEFAULT_PATH,'vmess_path':DEFAULT_VMESS_PATH,'xhttp_path':'/xhttp','grpc_service':'vpnstan','grpc_path':'/grpc','httpupgrade_path':'/upgrade','vmess_xhttp_path':'/vmess-xhttp','vmess_grpc_path':'/vmess-grpc','vmess_httpupgrade_path':'/vmess-upgrade','trojan_ws_path':'/trojan','trojan_xhttp_path':'/trojan-xhttp','trojan_grpc_path':'/trojan-grpc','trojan_httpupgrade_path':'/trojan-upgrade','sub_path':SUB_PATH,
               'panel_title':'vpnstan','support_url':'','dns_server':'1.1.1.1,1.0.0.1','dns_profile':'cloudflare','wg_endpoint':'','wg_server_public_key':'','announce':'اشتراک vpnstan — برای دریافت آخرین کانفیگ، لینک اشتراک را به‌روزرسانی کنید.','update_interval':'1','theme':'dark','telegram_token':'','telegram_admin_id':'','telegram_enabled':'0','telegram_plans':json.dumps([{'name':'50GB / 30 روز','gb':50,'days':30,'price':''}],ensure_ascii=False),'telegram_payment_text':'پس از پرداخت، روی «پرداخت کردم» بزنید تا سفارش برای ادمین ارسال شود. پرداخت به‌صورت دستی بررسی می‌شود.',
-              'telegram_trial_enabled':'1','telegram_trial_gb':'1','telegram_trial_days':'1','telegram_referral_reward':'1','telegram_support_text':'برای پشتیبانی پیام خود را ارسال کنید.','telegram_mandatory_channel':'','telegram_welcome_text':'به فروشگاه VPNSTAN خوش آمدید.','telegram_card_number':'','telegram_card_name':'',
+              'telegram_trial_enabled':'1','telegram_trial_gb':'1','telegram_trial_days':'1','telegram_referral_reward':'1','telegram_support_text':'برای پشتیبانی پیام خود را ارسال کنید.','telegram_mandatory_channel':'@vpnstan1','telegram_welcome_text':'به فروشگاه VPNSTAN خوش آمدید.','telegram_card_number':'','telegram_card_name':'',
               'telegram_renew_7_price':'30000','telegram_renew_30_price':'100000','telegram_renew_90_price':'250000',
               'telegram_add_5_price':'30000','telegram_add_10_price':'50000','telegram_add_25_price':'100000'}
     for k,v in defaults.items(): c.execute('INSERT OR IGNORE INTO settings(k,v) VALUES(?,?)',(k,v))
@@ -1379,7 +1379,7 @@ class H(BaseHTTPRequestHandler):
             if token:
                 try: bot=tg_api('getMe',{},10)
                 except Exception as e: err=str(e)
-            return send(self,200,{'success':True,'enabled':enabled,'configured':bool(token),'connected':bool(bot),'bot':bot,'botId':(bot or {}).get('id') if bot else None,'error':err,'adminId':admin_id,'adminConfigured':bool(admin_id),'plans':tg_plans()})
+            return send(self,200,{'success':True,'enabled':enabled,'configured':bool(token),'connected':bool(bot),'bot':bot,'botId':(bot or {}).get('id') if bot else None,'error':err,'adminId':admin_id,'adminConfigured':bool(admin_id),'channel':st.get('telegram_mandatory_channel','@vpnstan1'),'channelLink':('https://t.me/'+st.get('telegram_mandatory_channel','@vpnstan1').lstrip('@')) if st.get('telegram_mandatory_channel','@vpnstan1') else '','plans':tg_plans()})
         if p=='/api/telegram/save':
             if not is_admin(self): return send(self,403,{'success':False,'msg':'فقط ادمین دسترسی دارد'})
             try:d=body(self); token=str(d.get('token','')).strip(); admin_id=str(d.get('adminId','')).strip(); enabled=bool(d.get('enabled'))
@@ -1403,7 +1403,7 @@ class H(BaseHTTPRequestHandler):
             set_setting('telegram_card_name',str(d.get('cardName','')).strip())
             set_setting('telegram_welcome_text',str(d.get('welcomeText','به فروشگاه VPNSTAN خوش آمدید.')).strip() or 'به فروشگاه VPNSTAN خوش آمدید.')
             set_setting('telegram_support_text',str(d.get('supportText','برای پشتیبانی پیام خود را ارسال کنید.')).strip() or 'برای پشتیبانی پیام خود را ارسال کنید.')
-            set_setting('telegram_mandatory_channel',str(d.get('mandatoryChannel','')).strip())
+            set_setting('telegram_mandatory_channel',str(d.get('mandatoryChannel','@vpnstan1')).strip() or '@vpnstan1')
             try: set_setting('telegram_referral_reward',max(0,float(d.get('referralReward',1))))
             except: set_setting('telegram_referral_reward','1')
             set_setting('telegram_trial_enabled','1' if bool(d.get('trialEnabled',True)) else '0')
@@ -1537,7 +1537,7 @@ class H(BaseHTTPRequestHandler):
             if token:
                 try: bot=tg_api('getMe',{},10)
                 except Exception as e: err=str(e)
-            return send(self,200,{'success':True,'enabled':enabled,'configured':bool(token),'connected':bool(bot),'bot':bot,'botId':(bot or {}).get('id') if bot else None,'error':err,'adminId':admin_id,'adminConfigured':bool(admin_id),'plans':tg_plans()})
+            return send(self,200,{'success':True,'enabled':enabled,'configured':bool(token),'connected':bool(bot),'bot':bot,'botId':(bot or {}).get('id') if bot else None,'error':err,'adminId':admin_id,'adminConfigured':bool(admin_id),'channel':st.get('telegram_mandatory_channel','@vpnstan1'),'channelLink':('https://t.me/'+st.get('telegram_mandatory_channel','@vpnstan1').lstrip('@')) if st.get('telegram_mandatory_channel','@vpnstan1') else '','plans':tg_plans()})
         if p=='/api/telegram/save':
             if not is_admin(self): return send(self,403,{'success':False,'msg':'فقط ادمین دسترسی دارد'})
             try:d=body(self); token=str(d.get('token','')).strip(); admin_id=str(d.get('adminId','')).strip(); enabled=bool(d.get('enabled'))
