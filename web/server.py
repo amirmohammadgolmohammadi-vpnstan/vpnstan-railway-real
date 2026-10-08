@@ -1448,16 +1448,18 @@ class H(BaseHTTPRequestHandler):
             key=bot_api_key()
             return send(self,200,{'success':True,'configured':bool(key),'apiKey':key,'header':'Authorization: Bearer <API_KEY>','baseUrl':'https://'+self.headers.get('Host','')})
         if p=='/api/server/status':
-            if not bot_api_authed(self): return send(self,401,{'success':False,'msg':'API key نامعتبر است'})
+            if not (bot_api_authed(self) or authed(self)): return send(self,401,{'success':False,'msg':'نیاز به ورود یا API key دارید'})
             alive=bool(XRAY_PROC and XRAY_PROC.poll() is None)
             return send(self,200,{'success':True,'status':'online' if alive else 'offline','xray':alive,'version':PANEL_VERSION,'panel':'VPNSTAN'})
         if p=='/api/clients':
-            if not bot_api_authed(self): return send(self,401,{'success':False,'msg':'API key نامعتبر است'})
-            c=db(); rows=c.execute('SELECT * FROM clients ORDER BY id DESC').fetchall(); c.close()
+            if not (bot_api_authed(self) or authed(self)): return send(self,401,{'success':False,'msg':'نیاز به ورود یا API key دارید'})
+            c=db(); scope=None if bot_api_authed(self) else panel_scope(self)
+            rows=c.execute('SELECT * FROM clients ORDER BY id DESC').fetchall() if scope is None else c.execute('SELECT * FROM clients WHERE panel_id=? ORDER BY id DESC',(scope,)).fetchall(); c.close()
             return send(self,200,{'success':True,'clients':[client_data(self,r,settings()) for r in rows]})
         if p=='/api/traffic':
-            if not bot_api_authed(self): return send(self,401,{'success':False,'msg':'API key نامعتبر است'})
-            c=db(); rows=c.execute('SELECT id,name,uuid,gb,expiry_at,enabled FROM clients ORDER BY id DESC').fetchall(); c.close()
+            if not (bot_api_authed(self) or authed(self)): return send(self,401,{'success':False,'msg':'نیاز به ورود یا API key دارید'})
+            c=db(); scope=None if bot_api_authed(self) else panel_scope(self)
+            rows=c.execute('SELECT id,name,uuid,gb,expiry_at,enabled FROM clients ORDER BY id DESC').fetchall() if scope is None else c.execute('SELECT id,name,uuid,gb,expiry_at,enabled FROM clients WHERE panel_id=? ORDER BY id DESC',(scope,)).fetchall(); c.close()
             items=[]; total_up=0; total_down=0
             for r in rows:
                 tr=traffic_for(r['id']); total_up+=tr['upload']; total_down+=tr['download']
@@ -1582,10 +1584,11 @@ class H(BaseHTTPRequestHandler):
             return send(self,200,{'success':True,'client':client_data(self,r,settings())})
         if p=='/api/system':
             if not authed(self): return send(self,401,{'success':False,'msg':'نیاز به ورود دارید'})
-            alive=bool(XRAY_PROC and XRAY_PROC.poll() is None)
+            m=system_metrics()
             try: log=open('/opt/vpnstan/data/xray.log','rb').read()[-6000:].decode('utf-8','replace')
             except: log=''
-            return send(self,200,{'success':True,'xray':alive,'port':int(os.environ.get('PORT','8080')),'inboundPort':XRAY_INBOUND_PORT,'log':log})
+            m.update({'success':True,'inboundPort':XRAY_INBOUND_PORT,'log':log,'version':PANEL_VERSION})
+            return send(self,200,m)
         return self.static()
     def do_POST(self):
         p=urllib.parse.urlparse(self.path).path
@@ -1630,7 +1633,23 @@ class H(BaseHTTPRequestHandler):
             for x in self.headers.get('Cookie','').split(';'):
                 if x.strip().startswith('vpnstan_session='): SESSIONS.pop(x.strip().split('=',1)[1],None); SESSION_USERS.pop(x.strip().split('=',1)[1],None)
             return send(self,200,{'success':True},{'Set-Cookie':'vpnstan_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax'})
-        if not authed(self): return send(self,401,{'success':False,'msg':'نیاز به ورود دارید'})
+        if not (authed(self) or bot_api_authed(self)): return send(self,401,{'success':False,'msg':'نیاز به ورود یا API key دارید'})
+        if p=='/api/xray/restart':
+            if not is_admin(self): return send(self,403,{'success':False,'msg':'فقط ادمین دسترسی دارد'})
+            try:
+                restart_xray(); return send(self,200,{'success':True,'xray':bool(XRAY_PROC and XRAY_PROC.poll() is None),'msg':'Xray restarted'})
+            except Exception as e: return send(self,500,{'success':False,'msg':'Restart failed: '+str(e)})
+        if p=='/api/xray/stop':
+            if not is_admin(self): return send(self,403,{'success':False,'msg':'فقط ادمین دسترسی دارد'})
+            try:
+                proc=globals().get('XRAY_PROC')
+                if proc and proc.poll() is None:
+                    proc.terminate()
+                    try: proc.wait(timeout=3)
+                    except subprocess.TimeoutExpired: proc.kill()
+                globals()['XRAY_PROC']=None
+                return send(self,200,{'success':True,'xray':False,'msg':'Xray stopped'})
+            except Exception as e: return send(self,500,{'success':False,'msg':'Stop failed: '+str(e)})
         if p=='/api/bot/key/regenerate':
             if not is_admin(self): return send(self,403,{'success':False,'msg':'فقط ادمین دسترسی دارد'})
             if BOT_API_KEY_ENV:
@@ -1639,7 +1658,7 @@ class H(BaseHTTPRequestHandler):
             set_setting('bot_api_key',key)
             return send(self,200,{'success':True,'apiKey':key})
         if p=='/api/clients/create':
-            if not bot_api_authed(self): return send(self,401,{'success':False,'msg':'API key نامعتبر است'})
+            if not (bot_api_authed(self) or authed(self)): return send(self,401,{'success':False,'msg':'نیاز به ورود یا API key دارید'})
             try:
                 d=body(self); name=str(d.get('name','')).strip(); gb=float(d.get('gb',0)); days=int(d.get('days',0))
                 protocol=str(d.get('protocol','vless')).lower(); transport=str(d.get('transport','ws')).lower()
@@ -1654,7 +1673,7 @@ class H(BaseHTTPRequestHandler):
             cid=c.execute('SELECT last_insert_rowid()').fetchone()[0]; c.commit(); row=c.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone(); c.close(); restart_xray()
             return send(self,201,{'success':True,'client':client_data(self,row,settings())})
         if p.startswith('/api/clients/') and p.endswith('/renew'):
-            if not bot_api_authed(self): return send(self,401,{'success':False,'msg':'API key نامعتبر است'})
+            if not (bot_api_authed(self) or authed(self)): return send(self,401,{'success':False,'msg':'نیاز به ورود یا API key دارید'})
             try: cid=int(p.split('/')[3]); d=body(self); days=int(d.get('days',0))
             except: return send(self,400,{'success':False,'msg':'درخواست نامعتبر'})
             if days<=0 or days>3650:return send(self,400,{'success':False,'msg':'تعداد روز نامعتبر است'})
@@ -1664,7 +1683,7 @@ class H(BaseHTTPRequestHandler):
             c.execute('UPDATE clients SET expiry_at=?,enabled=1,days=days+? WHERE id=?',(newexp,days,cid)); c.commit(); row=c.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone(); c.close(); restart_xray()
             return send(self,200,{'success':True,'client':client_data(self,row,settings())})
         if p.startswith('/api/clients/') and p.endswith('/volume'):
-            if not bot_api_authed(self): return send(self,401,{'success':False,'msg':'API key نامعتبر است'})
+            if not (bot_api_authed(self) or authed(self)): return send(self,401,{'success':False,'msg':'نیاز به ورود یا API key دارید'})
             try: cid=int(p.split('/')[3]); d=body(self); gb=float(d.get('gb',0))
             except: return send(self,400,{'success':False,'msg':'درخواست نامعتبر'})
             if gb<=0 or gb>100000:return send(self,400,{'success':False,'msg':'حجم نامعتبر است'})
@@ -1673,7 +1692,7 @@ class H(BaseHTTPRequestHandler):
             c.execute('UPDATE clients SET gb=gb+? WHERE id=?',(gb,cid)); c.commit(); row=c.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone(); c.close()
             return send(self,200,{'success':True,'client':client_data(self,row,settings())})
         if p.startswith('/api/clients/') and p.endswith('/toggle'):
-            if not bot_api_authed(self): return send(self,401,{'success':False,'msg':'API key نامعتبر است'})
+            if not (bot_api_authed(self) or authed(self)): return send(self,401,{'success':False,'msg':'نیاز به ورود یا API key دارید'})
             try: cid=int(p.split('/')[3])
             except: return send(self,400,{'success':False,'msg':'شناسه نامعتبر است'})
             c=db(); r=c.execute('SELECT enabled FROM clients WHERE id=?',(cid,)).fetchone()
@@ -1681,7 +1700,7 @@ class H(BaseHTTPRequestHandler):
             new=0 if r['enabled'] else 1; c.execute('UPDATE clients SET enabled=? WHERE id=?',(new,cid)); c.commit(); c.close(); restart_xray()
             return send(self,200,{'success':True,'enabled':bool(new)})
         if p.startswith('/api/clients/') and p.endswith('/delete'):
-            if not bot_api_authed(self): return send(self,401,{'success':False,'msg':'API key نامعتبر است'})
+            if not (bot_api_authed(self) or authed(self)): return send(self,401,{'success':False,'msg':'نیاز به ورود یا API key دارید'})
             try: cid=int(p.split('/')[3])
             except: return send(self,400,{'success':False,'msg':'شناسه نامعتبر است'})
             c=db(); r=c.execute('SELECT id FROM clients WHERE id=?',(cid,)).fetchone()
