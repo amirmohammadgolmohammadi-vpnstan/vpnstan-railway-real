@@ -53,10 +53,28 @@ async function req(u,o={}){let r=await fetch(u,{credentials:'include',...o});let
 const titles={dashboard:'نمای کلی',clients:'کلاینت‌ها',configs:'کانفیگ‌ها',subscriptions:'اشتراک‌ها',dns:'DNS',settings:'تنظیمات',api:'API',telegram:'ربات تلگرام',account:'حساب من',admin:'مدیریت پنل‌ها'};
 function can(p){return !me||me.role==='admin'||me.panel_id===0||p==='overview'||p==='account'||me.permissions?.[p]}
 function applyPermissions(){document.querySelectorAll('.nav[data-perm]').forEach(n=>{const p=n.dataset.perm;let hide=false;if(p==='admin')hide=!(me?.role==='admin');else if(p==='telegram')hide=!(me?.role==='admin');else hide=!can(p);n.classList.toggle('hidden',hide)});if(me?.role==='admin'){document.getElementById('adminNav').classList.remove('hidden');$('telegramNav')?.classList.remove('hidden');$('masterOverview').classList.remove('hidden')}else{$('masterOverview').classList.add('hidden')}$('currentPanelBadge').textContent='v28';if($('headerUser'))$('headerUser').textContent=me?.username||'admin';if($('dropUsername'))$('dropUsername').textContent=me?.username||'admin';if($('dropRole'))$('dropRole').textContent=me?.role==='admin'?'مدیر / ادمین':'کاربر پنل'}
-function openTab(id){const section=$(id);if(!section)return;const nav=document.querySelector(`.nav[data-tab="${id}"]`);if(nav&&nav.classList.contains('hidden'))return;document.querySelectorAll('.tab').forEach(x=>{x.classList.add('hidden');x.classList.remove('active-tab')});section.classList.remove('hidden');section.classList.add('active-tab');document.querySelectorAll('.nav').forEach(x=>x.classList.toggle('active',x.dataset.tab===id));$('title').textContent=titles[id]||id;if(id==='clients')renderClients();if(id==='configs')renderConfigs();if(id==='subscriptions')renderSubs();if(id==='dns')renderDns();if(id==='settings')loadSettings();if(id==='api')loadApiPage();if(id==='telegram')loadTelegram();if(id==='account')loadMe();if(id==='admin')loadPanels()}
+function openTab(id){
+ const section=$(id); if(!section)return;
+ const nav=document.querySelector(`.nav[data-tab="${id}"]`);
+ if(nav&&nav.classList.contains('hidden'))return;
+ // Hard-isolate top-level pages: only the selected root section is rendered.
+ document.querySelectorAll('[data-tab-root]').forEach(x=>{x.classList.add('hidden');x.classList.remove('active-tab');x.style.display='none'});
+ section.classList.remove('hidden');section.classList.add('active-tab');section.style.display='block';
+ document.querySelectorAll('.nav[data-tab]').forEach(x=>x.classList.toggle('active',x.dataset.tab===id));
+ $('title').textContent=titles[id]||id;
+ if(id==='clients')renderClients();
+ if(id==='configs')renderConfigs();
+ if(id==='subscriptions')renderSubs();
+ if(id==='dns')renderDns();
+ if(id==='settings')loadSettings();
+ if(id==='api')loadApiPage();
+ if(id==='telegram')loadTelegram();
+ if(id==='account')loadMe();
+ if(id==='admin')loadPanels();
+}
 document.querySelectorAll('.nav').forEach(x=>x.addEventListener('click',()=>openTab(x.dataset.tab)));
 function toggleSidebar(force){const app=document.getElementById('app');if(!app)return;const collapsed=typeof force==='boolean'?force:!app.classList.contains('sidebar-collapsed');app.classList.toggle('sidebar-collapsed',collapsed);localStorage.setItem('vpnstan_sidebar_collapsed',collapsed?'1':'0');const b=document.getElementById('sidebarToggle');if(b){b.textContent=collapsed?'☰':'☰';b.title=collapsed?'باز کردن نوار کناری':'بستن نوار کناری'}}
-window.addEventListener('DOMContentLoaded',()=>{const b=document.getElementById('sidebarToggle');if(b)b.addEventListener('click',()=>toggleSidebar());const app=document.getElementById('app');if(app&&localStorage.getItem('vpnstan_sidebar_collapsed')==='1')app.classList.add('sidebar-collapsed');const dash=document.getElementById('dashboard');if(dash&&!dash.classList.contains('hidden'))dash.classList.add('active-tab')});
+window.addEventListener('DOMContentLoaded',()=>{const b=document.getElementById('sidebarToggle');if(b)b.addEventListener('click',()=>toggleSidebar());const app=document.getElementById('app');if(app&&localStorage.getItem('vpnstan_sidebar_collapsed')==='1')app.classList.add('sidebar-collapsed');document.querySelectorAll('[data-tab-root]').forEach(x=>{x.classList.add('hidden');x.classList.remove('active-tab');x.style.display='none'});const dash=document.getElementById('dashboard');if(dash){dash.classList.remove('hidden');dash.classList.add('active-tab');dash.style.display='block'}});
 window.addEventListener('error',e=>{const el=$('loginMsg')||$('createMsg');if(el&&!e.message.includes('Script error'))el.textContent='خطای رابط پنل: '+e.message});
 function updateProtocolFields(){const p=$('protocol')?.value;const f=$('dnsField');const tr=$('transport');const tl=$('transportLabel');if(f){f.classList.add('hidden');f.innerHTML=''}if(tr){tr.disabled=(p==='wireguard'||p==='dns');if(tr.disabled)tr.value='ws'}if(tl)tl.classList.toggle('hidden',p==='wireguard'||p==='dns');const note=$('createMsg');if(note&&p==='dns')note.textContent='برای این کاربر یک DNS اختصاصی DoH با حجم و اعتبار جداگانه ساخته می‌شود.';else if(note&&note.textContent.includes('DNS اختصاصی'))note.textContent=''}
 $('protocol')?.addEventListener('change',updateProtocolFields);window.addEventListener('DOMContentLoaded',updateProtocolFields);
@@ -219,16 +237,6 @@ function v28FmtBytes(n){
   const u=['B','KB','MB','GB','TB']; let i=0;
   while(n>=1024&&i<u.length-1){n/=1024;i++}
   return (n<10?n.toFixed(2):n.toFixed(1))+' '+u[i];
-}
-function v28RenderInbounds(){
-  const body=document.getElementById('v28InboundBody'); if(!body)return;
-  const arr=(typeof clients!=='undefined' && Array.isArray(clients))?clients:[];
-  body.innerHTML=arr.slice(0,25).map((c,i)=>{
-    const proto=String(c.protocol||c.type||'VLESS').toLowerCase();
-    const name=String(c.name||c.remark||('client-'+(i+1)));
-    const used=Number(c.usedBytes||c.used||0), total=Number(c.totalBytes||c.total||0);
-    return `<tr><td>${c.id??(i+1)}</td><td>⋮</td><td><span class="v28-pill green">●</span></td><td>${name}</td><td>${c.port||'—'}</td><td>${proto}</td><td>1</td><td>${v28FmtBytes(used)} / ${v28FmtBytes(total)}</td><td>${c.days||'∞'}</td></tr>`;
-  }).join('') || '<tr><td colspan="9" style="text-align:center;padding:22px">No inbounds</td></tr>';
 }
 function v28FilterInbounds(q){
   const rows=document.querySelectorAll('#v28InboundBody tr'); q=String(q||'').toLowerCase();

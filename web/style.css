@@ -247,3 +247,7 @@ header{height:68px;background:rgba(5,14,26,.95);border-bottom:1px solid #172d49}
 .api-code{direction:ltr;text-align:left;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;margin:8px 0;font:12px Consolas,monospace;overflow:auto;color:var(--text)}
 .api-endpoints{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.api-endpoints>div{display:grid;grid-template-columns:58px 1fr;gap:8px;align-items:center;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:11px}.api-endpoints code{direction:ltr;text-align:left;font:12px Consolas,monospace}.api-endpoints small{grid-column:2;color:var(--muted)}.method{font-size:10px;font-weight:800;text-align:center;border-radius:7px;padding:5px 4px}.method.get{background:rgba(47,123,255,.16);color:#6ea2ff}.method.post{background:rgba(54,208,157,.14);color:#48d9aa}
 @media(max-width:800px){.api-endpoints{grid-template-columns:1fr}}
+
+/* v28.3: hard page isolation. Only the active top-level section is visible. */
+.app main > [data-tab-root]{display:none!important}
+.app main > [data-tab-root].active-tab{display:block!important}
