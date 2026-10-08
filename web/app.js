@@ -238,11 +238,4 @@ function v28FmtBytes(n){
   while(n>=1024&&i<u.length-1){n/=1024;i++}
   return (n<10?n.toFixed(2):n.toFixed(1))+' '+u[i];
 }
-function v28FilterInbounds(q){
-  const rows=document.querySelectorAll('#v28InboundBody tr'); q=String(q||'').toLowerCase();
-  rows.forEach(r=>r.style.display=r.textContent.toLowerCase().includes(q)?'':'none');
-}
-setTimeout(v28RenderInbounds,500);
-setInterval(v28RenderInbounds,5000);
-
 setInterval(()=>{if(!$('app')?.classList.contains('hidden')) loadSystemStats()},5000);
