@@ -130,6 +130,13 @@ async function loadSystemStats(){try{const d=await req('/api/system');
  const alive=!!d.xray;if($('xrayState'))$('xrayState').textContent=alive?'Running':'Stopped';if($('xrayDot')){$('xrayDot').className=alive?'on':'off'}
  if($('sysIpv4'))$('sysIpv4').textContent=d.ipv4||'--';if($('sysIpv6'))$('sysIpv6').textContent=d.ipv6||'--';if($('sysTcp'))$('sysTcp').textContent=d.tcp||'--';if($('sysUdp'))$('sysUdp').textContent=d.udp||'--';if($('sysDown'))$('sysDown').textContent=fmtSysBytes(d.download);if($('sysUp'))$('sysUp').textContent=fmtSysBytes(d.upload);if($('sysUsageRam'))$('sysUsageRam').textContent=Math.round(r.percent||0)+'%';if($('sysClients'))$('sysClients').textContent=clients.length;
  if($('serverIp'))$('serverIp').textContent=d.ipv4||d.host||settings.node_host||'--';if($('serverPort'))$('serverPort').textContent=d.port||settings.node_port||443;
+ // Live 3X-UI-style overview
+ if($('v28Cpu'))$('v28Cpu').textContent=Math.round(c)+'%';setGauge('v28CpuArc',c);
+ if($('v28Ram'))$('v28Ram').textContent=Math.round(r.percent||0)+'%';if($('v28RamText'))$('v28RamText').textContent=fmtSysBytes(r.used)+' / '+fmtSysBytes(r.total);setGauge('v28RamArc',r.percent);
+ if($('v28Swap'))$('v28Swap').textContent=Math.round(sw.percent||0)+'%';if($('v28SwapText'))$('v28SwapText').textContent=fmtSysBytes(sw.used)+' / '+fmtSysBytes(sw.total);setGauge('v28SwapArc',sw.percent);
+ if($('v28Disk'))$('v28Disk').textContent=Math.round(di.percent||0)+'%';if($('v28DiskText'))$('v28DiskText').textContent=fmtSysBytes(di.used)+' / '+fmtSysBytes(di.total);setGauge('v28DiskArc',di.percent);
+ if($('v28Uptime'))$('v28Uptime').textContent=fmtUptime(d.uptime);if($('v28Load'))$('v28Load').textContent=(d.load?.one??0).toFixed(2)+' / '+(d.load?.five??0).toFixed(2)+' / '+(d.load?.fifteen??0).toFixed(2);
+ if($('v28XrayState'))$('v28XrayState').textContent=alive?'Running':'Stopped';if($('v28Ipv4'))$('v28Ipv4').textContent=d.ipv4||'--';if($('v28Ipv6'))$('v28Ipv6').textContent=d.ipv6||'--';if($('v28Tcp'))$('v28Tcp').textContent=d.tcp??'--';if($('v28Udp'))$('v28Udp').textContent=d.udp??'--';if($('v28Up'))$('v28Up').textContent=fmtSysBytes(d.upload);if($('v28Down'))$('v28Down').textContent=fmtSysBytes(d.download);if($('v28Out'))$('v28Out').textContent=fmtSysBytes(d.upload);if($('v28In'))$('v28In').textContent=fmtSysBytes(d.download);if($('v28Usage'))$('v28Usage').textContent='RAM '+Math.round(r.percent||0)+'%';if($('v28Clients'))$('v28Clients').textContent='Clients '+clients.length;if($('v28ClientSummary'))$('v28ClientSummary').textContent=clients.length;if($('v28SentRecv'))$('v28SentRecv').textContent=fmtSysBytes(Number(d.upload||0)+Number(d.download||0));if($('v28TotalUsage'))$('v28TotalUsage').textContent=fmtSysBytes(Number(d.upload||0)+Number(d.download||0));
  }catch(e){if(e.message&&e.message.includes('ورود'))return;console.warn('system stats',e)}}
 async function showSystemLogs(){try{const d=await req('/api/system');const log=String(d.log||'').trim()||'لاگی ثبت نشده است.';const box=document.createElement('div');box.className='modal';box.innerHTML=`<div class="modal-box"><div class="modal-head"><div><h2>لاگ Xray</h2><small class="muted">آخرین لاگ‌های سرویس</small></div><button class="ghost" onclick="this.closest('.modal').remove()">✕</button></div><pre style="max-height:55vh;overflow:auto;direction:ltr;text-align:left;white-space:pre-wrap;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:12px;font:11px Consolas;color:var(--text)"></pre><div class="modal-actions"><button class="btn primary" onclick="this.closest('.modal').remove()">بستن</button></div></div>`;box.querySelector('pre').textContent=log;document.body.appendChild(box)}catch(e){alert(e.message||'دریافت لاگ ناموفق بود')}}
 async function controlXray(action){try{const d=await req('/api/xray/'+action,{method:'POST'});await loadSystemStats();if(d.msg)alert(d.msg)}catch(e){alert(e.message||'عملیات Xray انجام نشد')}}
@@ -213,21 +220,5 @@ function v28FmtBytes(n){
   while(n>=1024&&i<u.length-1){n/=1024;i++}
   return (n<10?n.toFixed(2):n.toFixed(1))+' '+u[i];
 }
-function v28RenderInbounds(){
-  const body=document.getElementById('v28InboundBody'); if(!body)return;
-  const arr=(typeof clients!=='undefined' && Array.isArray(clients))?clients:[];
-  body.innerHTML=arr.slice(0,25).map((c,i)=>{
-    const proto=String(c.protocol||c.type||'VLESS').toLowerCase();
-    const name=String(c.name||c.remark||('client-'+(i+1)));
-    const used=Number(c.usedBytes||c.used||0), total=Number(c.totalBytes||c.total||0);
-    return `<tr><td>${c.id??(i+1)}</td><td>⋮</td><td><span class="v28-pill green">●</span></td><td>${name}</td><td>${c.port||'—'}</td><td>${proto}</td><td>1</td><td>${v28FmtBytes(used)} / ${v28FmtBytes(total)}</td><td>${c.days||'∞'}</td></tr>`;
-  }).join('') || '<tr><td colspan="9" style="text-align:center;padding:22px">No inbounds</td></tr>';
-}
-function v28FilterInbounds(q){
-  const rows=document.querySelectorAll('#v28InboundBody tr'); q=String(q||'').toLowerCase();
-  rows.forEach(r=>r.style.display=r.textContent.toLowerCase().includes(q)?'':'none');
-}
-setTimeout(v28RenderInbounds,500);
-setInterval(v28RenderInbounds,5000);
 
 setInterval(()=>{if(!$('app')?.classList.contains('hidden')) loadSystemStats()},5000);

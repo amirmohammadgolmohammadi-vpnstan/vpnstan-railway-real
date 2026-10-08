@@ -31,40 +31,32 @@
 <!-- v28 HOME: 3X-UI 2.9.0-inspired overview -->
 <section class="v28-home-overview" id="v28HomeOverview">
   <div class="v28-gauges">
-    <div class="v28-gauge-card"><div class="v28-gauge"><svg viewBox="0 0 120 70"><path class="track" d="M12 60 A48 48 0 0 1 108 60"/><path class="value" d="M12 60 A48 48 0 0 1 108 60" style="--pct:18"/></svg><b id="v28Cpu">--%</b></div><span>CPU &amp; Cores</span></div>
-    <div class="v28-gauge-card"><div class="v28-gauge"><svg viewBox="0 0 120 70"><path class="track" d="M12 60 A48 48 0 0 1 108 60"/><path class="value" d="M12 60 A48 48 0 0 1 108 60" style="--pct:42"/></svg><b id="v28Ram">--%</b></div><span>RAM</span><small id="v28RamText">-- / -- GB</small></div>
-    <div class="v28-gauge-card"><div class="v28-gauge"><svg viewBox="0 0 120 70"><path class="track" d="M12 60 A48 48 0 0 1 108 60"/><path class="value" d="M12 60 A48 48 0 0 1 108 60" style="--pct:35"/></svg><b id="v28Swap">--%</b></div><span>Swap</span><small id="v28SwapText">-- / -- GB</small></div>
-    <div class="v28-gauge-card"><div class="v28-gauge"><svg viewBox="0 0 120 70"><path class="track" d="M12 60 A48 48 0 0 1 108 60"/><path class="value" d="M12 60 A48 48 0 0 1 108 60" style="--pct:31"/></svg><b id="v28Disk">--%</b></div><span>Disk</span><small id="v28DiskText">-- / -- GB</small></div>
+    <div class="v28-gauge-card"><div class="v28-gauge"><svg viewBox="0 0 120 70"><path class="track" d="M12 60 A48 48 0 0 1 108 60"/><path id="v28CpuArc" class="value" d="M12 60 A48 48 0 0 1 108 60" style="--pct:18"/></svg><b id="v28Cpu">--%</b></div><span>CPU &amp; Cores</span></div>
+    <div class="v28-gauge-card"><div class="v28-gauge"><svg viewBox="0 0 120 70"><path class="track" d="M12 60 A48 48 0 0 1 108 60"/><path id="v28RamArc" class="value" d="M12 60 A48 48 0 0 1 108 60" style="--pct:42"/></svg><b id="v28Ram">--%</b></div><span>RAM</span><small id="v28RamText">-- / -- GB</small></div>
+    <div class="v28-gauge-card"><div class="v28-gauge"><svg viewBox="0 0 120 70"><path class="track" d="M12 60 A48 48 0 0 1 108 60"/><path id="v28SwapArc" class="value" d="M12 60 A48 48 0 0 1 108 60" style="--pct:35"/></svg><b id="v28Swap">--%</b></div><span>Swap</span><small id="v28SwapText">-- / -- GB</small></div>
+    <div class="v28-gauge-card"><div class="v28-gauge"><svg viewBox="0 0 120 70"><path class="track" d="M12 60 A48 48 0 0 1 108 60"/><path id="v28DiskArc" class="value" d="M12 60 A48 48 0 0 1 108 60" style="--pct:31"/></svg><b id="v28Disk">--%</b></div><span>Disk</span><small id="v28DiskText">-- / -- GB</small></div>
   </div>
 
   <div class="v28-info-grid">
     <div class="v28-info"><b>3X-UI</b><span class="v28-pill">v2.9.0 Style</span><span class="v28-pill">VPNSTAN</span></div>
     <div class="v28-info"><b>Uptime</b><span id="v28Uptime" class="v28-pill">--</span></div>
-    <div class="v28-info"><b>Xray</b><span class="v28-pill green">Running</span><span class="v28-pill pink">Stop</span><span class="v28-pill pink">Restart</span></div>
-    <div class="v28-info"><b>Manage</b><span class="v28-pill">Logs</span><span class="v28-pill">Config</span><span class="v28-pill">Backup &amp; Restore</span></div>
+    <div class="v28-info"><b>Xray</b><span id="v28XrayState" class="v28-pill green">--</span><button class="v28-action-btn" onclick="controlXray('stop')">Stop</button><button class="v28-action-btn" onclick="controlXray('restart')">Restart</button></div>
+    <div class="v28-info"><b>Manage</b><button class="v28-action-btn" onclick="showSystemLogs()">Logs</button><button class="v28-action-btn" onclick="openTab('settings')">Config</button><button class="v28-action-btn" onclick="openTab('settings')">Backup &amp; Restore</button></div>
     <div class="v28-info"><b>System Load</b><span id="v28Load" class="v28-pill green">--</span></div>
     <div class="v28-info"><b>Usage</b><span id="v28Usage" class="v28-pill green">RAM --</span><span id="v28Clients" class="v28-pill green">Clients --</span></div>
-    <div class="v28-info"><span class="v28-pill">IPv4</span><span class="v28-pill">IPv6</span></div>
-    <div class="v28-info"><span class="v28-pill">TCP: --</span><span class="v28-pill">UDP: --</span></div>
-    <div class="v28-info"><span class="v28-pill">↑ Up: --</span><span class="v28-pill">↓ Down: --</span></div>
-    <div class="v28-info"><span class="v28-pill">↑ Out: --</span><span class="v28-pill">↓ In: --</span></div>
+    <div class="v28-info"><span class="v28-pill">IPv4 <b id="v28Ipv4">--</b></span><span class="v28-pill">IPv6 <b id="v28Ipv6">--</b></span></div>
+    <div class="v28-info"><span class="v28-pill">TCP: <b id="v28Tcp">--</b></span><span class="v28-pill">UDP: <b id="v28Udp">--</b></span></div>
+    <div class="v28-info"><span class="v28-pill">↑ Up: <b id="v28Up">--</b></span><span class="v28-pill">↓ Down: <b id="v28Down">--</b></span></div>
+    <div class="v28-info"><span class="v28-pill">↑ Out: <b id="v28Out">--</b></span><span class="v28-pill">↓ In: <b id="v28In">--</b></span></div>
   </div>
 
   <div class="v28-summary">
     <div><span>Total Sent/Received:</span><b id="v28SentRecv">--</b></div>
     <div><span>Total Usage:</span><b id="v28TotalUsage">--</b></div>
-    <div><span>Total Inbounds:</span><b id="v28Inbounds">--</b></div>
     <div><span>Clients:</span><b id="v28ClientSummary">--</b></div>
   </div>
 
-  <div class="v28-inbounds panel">
-    <div class="v28-inbounds-head">
-      <div><button class="v28-green-btn" onclick="openTab('clients')">＋ Add Inbound</button><button class="v28-action-btn">General Actions</button></div>
-      <div><h2>Inbounds</h2><small>مدیریت کانفیگ‌ها و کلاینت‌ها</small></div>
-    </div>
-    <div class="v28-inbound-tools"><span class="v28-dot">●</span><input placeholder="Search" id="v28InboundSearch" oninput="v28FilterInbounds(this.value)"></div>
-    <div class="v28-table-wrap"><table class="v28-inbound-table"><thead><tr><th>ID</th><th>Menu</th><th>Enabled</th><th>Remark</th><th>Port</th><th>Protocol</th><th>Clients</th><th>Traffic</th><th>Duration</th></tr></thead><tbody id="v28InboundBody"></tbody></table></div>
-  </div>
+  </div>v>
 </section>
 
 <div class="stats"><div><span>کل کاربران</span><b id="count">0</b><span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3"/><path d="M3 20c.5-4 2.5-6 6-6s5.5 2 6 6M16 5.5a3 3 0 0 1 0 5.8M17 14c2.5.2 3.8 2 4 6"/></svg></span></div><div><span>کل کانفیگ‌ها</span><b id="configCount">0</b><span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3h9l4 4v14H6z"/><path d="M15 3v5h4M9 12h6M9 16h6"/></svg></span></div><div><span>لینک‌های ساب</span><b id="subCountDash">0</b><span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 12h8M12 8l4 4-4 4"/><path d="M5 7h4M15 17h4"/></svg></span></div><div><span>وضعیت سرور</span><b class="ok">آنلاین</b><span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h8M8 17h4"/></svg></span></div></div>

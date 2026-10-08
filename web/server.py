@@ -1,4 +1,5 @@
 import base64, hmac, json, os, secrets, sqlite3, subprocess, time, uuid, urllib.parse, threading, re, io, html, socket, urllib.request, tempfile, shutil
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 WEB=os.environ.get('VPNSTAN_WEB','/opt/vpnstan/web')
@@ -139,6 +140,104 @@ def dns_tcp_server():
             threading.Thread(target=dns_tcp_client,args=(conn,addr),daemon=True).start()
         except Exception as e:
             print('DNS TCP:',e,flush=True)
+
+
+def _read_proc_meminfo():
+    out={}
+    try:
+        for line in Path('/proc/meminfo').read_text().splitlines():
+            k, v = line.split(':',1)
+            parts=v.strip().split()
+            if not parts: continue
+            n=int(parts[0])
+            if len(parts)>1 and parts[1].lower()=='kb': n*=1024
+            out[k]=n
+    except Exception:
+        pass
+    return out
+
+def _proc_cpu_percent():
+    try:
+        def snap():
+            vals=list(map(int,Path('/proc/stat').read_text().splitlines()[0].split()[1:]))
+            idle=vals[3]+(vals[4] if len(vals)>4 else 0)
+            return sum(vals), idle
+        a=snap(); time.sleep(0.06); b=snap()
+        total=max(1,b[0]-a[0]); idle=max(0,b[1]-a[1])
+        return max(0.0,min(100.0,(total-idle)*100.0/total))
+    except Exception:
+        return 0.0
+
+def _iface_bytes():
+    rx=tx=0
+    try:
+        for line in Path('/proc/net/dev').read_text().splitlines()[2:]:
+            if ':' not in line: continue
+            _, data=line.split(':',1); vals=data.split()
+            if len(vals)>=9:
+                rx+=int(vals[0]); tx+=int(vals[8])
+    except Exception:
+        pass
+    return rx,tx
+
+def _socket_counts():
+    def count(path):
+        try: return max(0,len(Path(path).read_text().splitlines())-1)
+        except Exception: return 0
+    return count('/proc/net/tcp')+count('/proc/net/tcp6'), count('/proc/net/udp')+count('/proc/net/udp6')
+
+def _local_ips():
+    ipv4=ipv6=''
+    try:
+        s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.connect(('1.1.1.1',80)); ipv4=s.getsockname()[0]; s.close()
+    except Exception:
+        try: ipv4=socket.gethostbyname(socket.gethostname())
+        except Exception: pass
+    try:
+        infos=socket.getaddrinfo(socket.gethostname(),None,socket.AF_INET6)
+        for item in infos:
+            cand=item[4][0]
+            if cand and not cand.startswith('::1'):
+                ipv6=cand.split('%')[0]; break
+    except Exception:
+        pass
+    return ipv4,ipv6
+
+def _disk_usage():
+    try:
+        st=os.statvfs('/'); total=st.f_blocks*st.f_frsize; free=st.f_bavail*st.f_frsize; used=max(0,total-free)
+        return {'total':total,'used':used,'free':free,'percent':(used*100/total if total else 0)}
+    except Exception:
+        return {'total':0,'used':0,'free':0,'percent':0}
+
+def _swap_usage(mi):
+    total=int(mi.get('SwapTotal',0)); free=int(mi.get('SwapFree',0)); used=max(0,total-free)
+    return {'total':total,'used':used,'free':free,'percent':(used*100/total if total else 0)}
+
+def _xray_alive():
+    try:
+        if XRAY_PROC and XRAY_PROC.poll() is None: return True
+    except Exception: pass
+    try:
+        r=subprocess.run(['pgrep','-x','xray'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1)
+        return r.returncode==0
+    except Exception:
+        return False
+
+def system_metrics():
+    mi=_read_proc_meminfo()
+    total=int(mi.get('MemTotal',0)); avail=int(mi.get('MemAvailable',mi.get('MemFree',0))); used=max(0,total-avail)
+    ram={'total':total,'used':used,'free':avail,'percent':(used*100/total if total else 0)}
+    try: cores=os.cpu_count() or 1
+    except Exception: cores=1
+    cpu=_proc_cpu_percent()
+    disk=_disk_usage(); swap=_swap_usage(mi)
+    try: up=float(Path('/proc/uptime').read_text().split()[0])
+    except Exception: up=0
+    try: loads=os.getloadavg(); load={'one':loads[0],'five':loads[1],'fifteen':loads[2]}
+    except Exception: load={'one':0,'five':0,'fifteen':0}
+    rx,tx=_iface_bytes(); tcp,udp=_socket_counts(); ipv4,ipv6=_local_ips()
+    return {'ram':ram,'cpu':cpu,'cores':cores,'disk':disk,'swap':swap,'uptime':up,'load':load,'xray':_xray_alive(),'ipv4':ipv4,'ipv6':ipv6,'tcp':tcp,'udp':udp,'download':rx,'upload':tx,'host':ipv4 or socket.gethostname(),'port':DEFAULT_PORT}
 
 def db():
     c=sqlite3.connect(DB); c.row_factory=sqlite3.Row; return c
