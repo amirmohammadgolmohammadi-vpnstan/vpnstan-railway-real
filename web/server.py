@@ -196,7 +196,7 @@ def init_db():
         except sqlite3.OperationalError: pass
     try: c.execute("ALTER TABLE panel_users ADD COLUMN panel_id INTEGER NOT NULL DEFAULT 0")
     except sqlite3.OperationalError: pass
-    for col,typ,default in [('protocol','TEXT',"'vless'"),('transport','TEXT',"'ws'"),('dns_server','TEXT',"'1.1.1.1'"),('wg_private_key','TEXT',"''"),('wg_address','TEXT',"''"),('dns_token','TEXT',"''"),('panel_id','INTEGER','0')]:
+    for col,typ,default in [('carrier_profile','TEXT',"'auto'"),('protocol','TEXT',"'vless'"),('transport','TEXT',"'ws'"),('dns_server','TEXT',"'1.1.1.1'"),('wg_private_key','TEXT',"''"),('wg_address','TEXT',"''"),('dns_token','TEXT',"''"),('panel_id','INTEGER','0')]:
         try: c.execute(f'ALTER TABLE clients ADD COLUMN {col} {typ} NOT NULL DEFAULT {default}')
         except sqlite3.OperationalError: pass
     # Seed the first administrator from environment variables, only on first startup.
@@ -204,7 +204,7 @@ def init_db():
         import hashlib
         ph=hashlib.sha256(PASSWORD.encode()).hexdigest()
         c.execute('INSERT INTO panel_users(username,password_hash,role,enabled,created_at) VALUES(?,?,?,?,?)',(USERNAME,ph,'admin',1,int(time.time())))
-    defaults={'node_host':DEFAULT_HOST,'node_port':str(DEFAULT_PORT),'ws_path':DEFAULT_PATH,'vmess_path':DEFAULT_VMESS_PATH,'xhttp_path':'/xhttp','grpc_service':'vpnstan','grpc_path':'/grpc','httpupgrade_path':'/upgrade','vmess_xhttp_path':'/vmess-xhttp','vmess_grpc_path':'/vmess-grpc','vmess_httpupgrade_path':'/vmess-upgrade','trojan_ws_path':'/trojan','trojan_xhttp_path':'/trojan-xhttp','trojan_grpc_path':'/trojan-grpc','trojan_httpupgrade_path':'/trojan-upgrade','sub_path':SUB_PATH,
+    defaults={'node_host':DEFAULT_HOST,'node_port':str(DEFAULT_PORT),'carrier_profile':'auto','ws_path':DEFAULT_PATH,'vmess_path':DEFAULT_VMESS_PATH,'xhttp_path':'/xhttp','grpc_service':'vpnstan','grpc_path':'/grpc','httpupgrade_path':'/upgrade','vmess_xhttp_path':'/vmess-xhttp','vmess_grpc_path':'/vmess-grpc','vmess_httpupgrade_path':'/vmess-upgrade','trojan_ws_path':'/trojan','trojan_xhttp_path':'/trojan-xhttp','trojan_grpc_path':'/trojan-grpc','trojan_httpupgrade_path':'/trojan-upgrade','sub_path':SUB_PATH,
               'panel_title':'vpnstan','support_url':'','dns_server':'1.1.1.1,1.0.0.1','dns_profile':'cloudflare','wg_endpoint':'','wg_server_public_key':'','announce':'اشتراک vpnstan — برای دریافت آخرین کانفیگ، لینک اشتراک را به‌روزرسانی کنید.','update_interval':'1','theme':'dark','telegram_token':'','telegram_admin_id':'','telegram_enabled':'0','telegram_plans':json.dumps([{'name':'50GB / 30 روز','gb':50,'days':30,'price':''}],ensure_ascii=False),'telegram_payment_text':'پس از پرداخت، روی «پرداخت کردم» بزنید تا سفارش برای ادمین ارسال شود. پرداخت به‌صورت دستی بررسی می‌شود.',
               'telegram_trial_enabled':'1','telegram_trial_gb':'1','telegram_trial_days':'1','telegram_referral_reward':'1','telegram_support_text':'برای پشتیبانی پیام خود را ارسال کنید.','telegram_mandatory_channel':'','telegram_welcome_text':'به فروشگاه VPNSTAN خوش آمدید.','telegram_card_number':'','telegram_card_name':'',
               'telegram_renew_7_price':'30000','telegram_renew_30_price':'100000','telegram_renew_90_price':'250000',
@@ -1606,8 +1606,8 @@ class H(BaseHTTPRequestHandler):
         if p=='/api/clients/create':
             if not has_permission(self,'clients_create'): return send(self,403,{'success':False,'msg':'دسترسی ساخت کانفیگ برای این پنل فعال نیست'})
             try:
-                d=body(self); name=str(d.get('name','')).strip(); gb=float(d.get('gb',0)); days=int(d.get('days',0)); protocol=str(d.get('protocol','vless')).lower(); transport=str(d.get('transport','ws')).lower(); sub_count=int(d.get('subCount',1) or 1); st=settings(); dns_server=('internal' if protocol=='dns' else st.get('dns_server','')); scope=panel_scope(self) or 0
-                if protocol not in ('vless','vmess','trojan','wireguard','dns') or transport not in ('ws','xhttp','grpc','httpupgrade') or (protocol in ('wireguard','dns') and transport!='ws') or not name or gb<=0 or days<=0 or len(name)>80 or sub_count<1 or sub_count>20: raise ValueError
+                d=body(self); name=str(d.get('name','')).strip(); gb=float(d.get('gb',0)); days=int(d.get('days',0)); protocol=str(d.get('protocol','vless')).lower(); transport=str(d.get('transport','ws')).lower(); carrier_profile=str(d.get('carrierProfile',st.get('carrier_profile','auto'))).lower() if False else str(d.get('carrierProfile',settings().get('carrier_profile','auto'))).lower(); sub_count=int(d.get('subCount',1) or 1); st=settings(); dns_server=('internal' if protocol=='dns' else st.get('dns_server','')); scope=panel_scope(self) or 0
+                if carrier_profile not in ('auto','mci','mtni') or protocol not in ('vless','vmess','trojan','wireguard','dns') or transport not in ('ws','xhttp','grpc','httpupgrade') or (protocol in ('wireguard','dns') and transport!='ws') or not name or gb<=0 or days<=0 or len(name)>80 or sub_count<1 or sub_count>20: raise ValueError
                 if protocol=='dns' and sub_count!=1: raise ValueError
             except:return send(self,400,{'success':False,'msg':'نام، حجم، مدت یا تعداد کانفیگ نامعتبر است'})
             now=int(time.time()); sub_id=secrets.token_urlsafe(18); rows=[]
@@ -1618,7 +1618,10 @@ class H(BaseHTTPRequestHandler):
                 r=(cname,cuuid,sub_id,gb,days,now,now+days*86400,protocol,transport,dns_server,'','10.66.0.2/32',dns_token,scope)
                 c.execute('INSERT INTO clients(name,uuid,sub_id,gb,days,created_at,expiry_at,protocol,transport,dns_server,wg_private_key,wg_address,dns_token,panel_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',r)
                 rows.append(c.execute('SELECT * FROM clients WHERE uuid=?',(cuuid,)).fetchone())
-            c.commit(); c.close(); restart_xray(); first=rows[0]
+            c.commit(); c.close();
+            # Keep the last selected carrier profile as the default for regenerated configs.
+            c2=db(); c2.execute("INSERT INTO settings(k,v) VALUES('carrier_profile',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",(carrier_profile,)); c2.commit(); c2.close();
+            restart_xray(); first=rows[0]
             return send(self,201,{'success':True,'count':sub_count,'subId':sub_id,'client':client_data(self,first,settings()),'clients':[client_data(self,r,settings()) for r in rows]})
         if p.startswith('/api/clients/') and p.endswith('/edit'):
             if not has_permission(self,'clients_edit'): return send(self,403,{'success':False,'msg':'دسترسی ویرایش کانفیگ برای این پنل فعال نیست'})
