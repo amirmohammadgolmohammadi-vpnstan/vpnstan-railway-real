@@ -269,6 +269,30 @@ def collect_xray_stats():
         if m:
             email,kind=m.group(1),m.group(2)
             stats.setdefault(email,{'upload':0,'download':0})[kind]=value
+    # Some Xray builds/configurations return an empty statsquery result even
+    # though per-user counters are available through the single-stat API.
+    # Fall back to querying each client explicitly so the subscription never
+    # depends on the bulk stats list being populated.
+    c=db()
+    client_rows=c.execute('SELECT id,uuid FROM clients').fetchall()
+    c.close()
+    if not stats and client_rows:
+        for cr in client_rows:
+            email='vpnstan-'+str(cr['uuid'])
+            one={'upload':0,'download':0}
+            for kind in ('uplink','downlink'):
+                try:
+                    q=subprocess.run([XRAY_BIN,'api','stats','--server='+XRAY_API_ADDR,'-name='+f'user>>>{email}>>>traffic>>>{kind}'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=3,check=False)
+                    if q.returncode==0:
+                        text=q.stdout.decode('utf-8','replace')
+                        m=re.search(r'(?i)(?:value\D+)(\d+)',text)
+                        if not m:
+                            m=re.search(r'\"value\"\s*:\s*\"?(\d+)',text)
+                        if m: one['upload' if kind=='uplink' else 'download']=int(m.group(1))
+                except Exception:
+                    pass
+            if one['upload'] or one['download']:
+                stats[email]=one
     if not stats: return
     c=db(); now=int(time.time())
     rows=c.execute('SELECT id,uuid FROM clients').fetchall()
@@ -1041,6 +1065,8 @@ class H(BaseHTTPRequestHandler):
     def do_HEAD(self):
         u=urllib.parse.urlparse(self.path); p=u.path
         if p.startswith('/sub/'):
+            with XRAY_LOCK:
+                collect_xray_stats()
             sid=p.split('/')[-1]; s,rows=load_sub(self,sid)
             if not rows:self.send_response(404); self.end_headers(); return
             r=rows[0]; tr=traffic_for(r['id']); total=int(float(r['gb'])*1024**3); exp=r['expiry_at']; self.send_response(200); self.send_header('Subscription-Userinfo',f'upload={tr["upload"]}; download={tr["download"]}; total={total}; expire={exp}'); self.send_header('Profile-Title',base64.b64encode(s.get('panel_title','vpnstan').encode()).decode()); self.send_header('Profile-Update-Interval','1'); self.send_header('Cache-Control','no-store, no-cache, must-revalidate'); self.end_headers(); return
