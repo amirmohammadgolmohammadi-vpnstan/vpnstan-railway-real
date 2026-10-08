@@ -247,72 +247,104 @@ def fmt_date(ts):
     return time.strftime('%Y/%m/%d %H:%M',time.localtime(ts))
 
 def collect_xray_stats():
-    # Poll Xray's cumulative per-user counters every second and persist deltas.
-    if not os.path.exists(XRAY_BIN): return
-    try:
-        proc=subprocess.run([XRAY_BIN,'api','statsquery','--server='+XRAY_API_ADDR],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=5,check=False)
-        if proc.returncode != 0:
-            try:
-                with open('/opt/vpnstan/data/xray-stats.log','ab') as f: f.write((proc.stderr or b'')[-4000:]+b"\n")
-            except Exception: pass
-            return
-        data=json.loads((proc.stdout or b'{}').decode('utf-8','replace'))
-    except Exception as e:
-        try:
-            with open('/opt/vpnstan/data/xray-stats.log','a',encoding='utf-8') as f: f.write(str(e)+'\n')
-        except Exception: pass
+    # Read Xray cumulative user counters and persist their deltas.
+    # We intentionally query both the bulk API and each user API so a
+    # partially-populated statsquery response cannot make usage appear as 0.
+    if not os.path.exists(XRAY_BIN):
         return
-    stats={}
-    for item in data.get('stat',[]) or []:
-        name=str(item.get('name','')); value=int(item.get('value',0) or 0)
-        m=re.match(r'^user>>>(.+)>>>traffic>>>(uplink|downlink)$',name)
-        if m:
-            email,kind=m.group(1),m.group(2)
-            stats.setdefault(email,{'upload':0,'download':0})[kind]=value
-    # Some Xray builds/configurations return an empty statsquery result even
-    # though per-user counters are available through the single-stat API.
-    # Fall back to querying each client explicitly so the subscription never
-    # depends on the bulk stats list being populated.
     c=db()
-    client_rows=c.execute('SELECT id,uuid FROM clients').fetchall()
+    clients=c.execute('SELECT id,uuid FROM clients').fetchall()
     c.close()
-    if not stats and client_rows:
-        for cr in client_rows:
-            email='vpnstan-'+str(cr['uuid'])
-            one={'upload':0,'download':0}
-            for kind in ('uplink','downlink'):
-                try:
-                    q=subprocess.run([XRAY_BIN,'api','stats','--server='+XRAY_API_ADDR,'-name='+f'user>>>{email}>>>traffic>>>{kind}'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=3,check=False)
-                    if q.returncode==0:
-                        text=q.stdout.decode('utf-8','replace')
-                        m=re.search(r'(?i)(?:value\D+)(\d+)',text)
-                        if not m:
-                            m=re.search(r'\"value\"\s*:\s*\"?(\d+)',text)
-                        if m: one['upload' if kind=='uplink' else 'download']=int(m.group(1))
-                except Exception:
-                    pass
-            if one['upload'] or one['download']:
-                stats[email]=one
-    if not stats: return
-    c=db(); now=int(time.time())
-    rows=c.execute('SELECT id,uuid FROM clients').fetchall()
-    for r in rows:
-        st=stats.get('vpnstan-'+r['uuid']) or stats.get(r['uuid'])
-        if not st: continue
-        old=c.execute('SELECT upload,download,last_seen,raw_upload,raw_download FROM traffic WHERE client_id=?',(r['id'],)).fetchone()
-        if not old:
-            total_u=0; total_d=0; delta_u=0; delta_d=0; last=0
+    if not clients:
+        return
+
+    stats={}
+    errors=[]
+    try:
+        proc=subprocess.run(
+            [XRAY_BIN,'api','statsquery','--server='+XRAY_API_ADDR],
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=5,check=False
+        )
+        if proc.returncode==0:
+            data=json.loads((proc.stdout or b'{}').decode('utf-8','replace'))
+            for item in data.get('stat',[]) or []:
+                name=str(item.get('name',''))
+                try: value=int(item.get('value',0) or 0)
+                except Exception: value=0
+                m=re.match(r'^user>>>(.+)>>>traffic>>>(uplink|downlink)$',name)
+                if m:
+                    email,kind=m.group(1),m.group(2)
+                    stats.setdefault(email,{'upload':0,'download':0})['upload' if kind=='uplink' else 'download']=value
         else:
-            raw_u=int(old['raw_upload']); raw_d=int(old['raw_download'])
-            delta_u=(st['upload']-raw_u) if st['upload']>=raw_u else st['upload']
-            delta_d=(st['download']-raw_d) if st['download']>=raw_d else st['download']
-            total_u=int(old['upload'])+max(0,delta_u); total_d=int(old['download'])+max(0,delta_d)
-            last=now if delta_u+delta_d>0 else int(old['last_seen'])
-        c.execute("INSERT INTO traffic(client_id,upload,download,last_seen,raw_upload,raw_download) VALUES(?,?,?,?,?,?) ON CONFLICT(client_id) DO UPDATE SET upload=excluded.upload,download=excluded.download,last_seen=excluded.last_seen,raw_upload=excluded.raw_upload,raw_download=excluded.raw_download",(r['id'],total_u,total_d,last,st['upload'],st['download']))
+            errors.append('statsquery: '+(proc.stderr or b'').decode('utf-8','replace')[-1000:])
+    except Exception as e:
+        errors.append('statsquery exception: '+repr(e))
+
+    # Always perform a per-client lookup as a second source of truth.
+    # This also handles Xray versions where statsquery does not return all
+    # user records, while keeping the normal bulk query fast.
+    for cr in clients:
+        email='vpnstan-'+str(cr['uuid'])
+        one=stats.get(email,{'upload':0,'download':0})
+        for kind in ('uplink','downlink'):
+            try:
+                q=subprocess.run(
+                    [XRAY_BIN,'api','stats','--server='+XRAY_API_ADDR,
+                     '-name='+f'user>>>{email}>>>traffic>>>{kind}'],
+                    stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=3,check=False
+                )
+                if q.returncode==0:
+                    txt=q.stdout.decode('utf-8','replace')
+                    # Xray returns {"name":"...","value":"123"}.
+                    # Accept quoted or numeric values and whitespace/newlines.
+                    matches=re.findall(r'"value"\s*:\s*"?(\d+)"?',txt)
+                    if matches:
+                        one['upload' if kind=='uplink' else 'download']=int(matches[-1])
+                elif email not in stats:
+                    errors.append(f'{email}/{kind}: '+q.stderr.decode('utf-8','replace')[-500:])
+            except Exception as e:
+                errors.append(f'{email}/{kind}: {e!r}')
+        stats[email]=one
+
+    if errors:
+        try:
+            with open('/opt/vpnstan/data/xray-stats.log','a',encoding='utf-8') as f:
+                f.write(time.strftime('%Y-%m-%d %H:%M:%S ')+'\n'.join(errors[-20:])+'\n')
+        except Exception:
+            pass
+
+    c=db(); now=int(time.time())
+    for r in clients:
+        st=stats.get('vpnstan-'+str(r['uuid']))
+        if not st:
+            # Last-resort match: some Xray integrations can alter the email
+            # prefix, but the generated UUID is still present in the name.
+            for k,v in stats.items():
+                if str(r['uuid']) in k:
+                    st=v; break
+        if not st:
+            continue
+        old=c.execute('SELECT upload,download,last_seen,raw_upload,raw_download FROM traffic WHERE client_id=?',(r['id'],)).fetchone()
+        cur_u=max(0,int(st.get('upload',0))); cur_d=max(0,int(st.get('download',0)))
+        if not old:
+            # The first observed Xray counter is real traffic; do not throw it
+            # away. This was the main reason a fresh subscription could remain 0.
+            total_u=cur_u; total_d=cur_d; last=now if (cur_u or cur_d) else 0
+        else:
+            old_u=int(old['raw_upload']); old_d=int(old['raw_download'])
+            delta_u=cur_u-old_u if cur_u>=old_u else cur_u
+            delta_d=cur_d-old_d if cur_d>=old_d else cur_d
+            total_u=int(old['upload'])+max(0,delta_u)
+            total_d=int(old['download'])+max(0,delta_d)
+            last=now if (delta_u or delta_d) else int(old['last_seen'])
+        c.execute("INSERT INTO traffic(client_id,upload,download,last_seen,raw_upload,raw_download) VALUES(?,?,?,?,?,?) ON CONFLICT(client_id) DO UPDATE SET upload=excluded.upload,download=excluded.download,last_seen=excluded.last_seen,raw_upload=excluded.raw_upload,raw_download=excluded.raw_download",(r['id'],total_u,total_d,last,cur_u,cur_d))
+
+    # Enforce the configured quota after updating usage.
     c.commit()
     rows=c.execute('SELECT id,gb,expiry_at,enabled FROM clients').fetchall()
     for r in rows:
-        if not r['enabled'] or (r['expiry_at'] and r['expiry_at']<=now): continue
+        if not r['enabled'] or (r['expiry_at'] and r['expiry_at']<=now):
+            continue
         tr=c.execute('SELECT upload,download FROM traffic WHERE client_id=?',(r['id'],)).fetchone()
         if tr and int(tr['upload'])+int(tr['download']) >= float(r['gb'])*1024**3:
             c.execute('UPDATE clients SET enabled=0 WHERE id=?',(r['id'],))
