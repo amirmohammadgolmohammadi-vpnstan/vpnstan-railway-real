@@ -1,8 +1,8 @@
 
-/* VPNSTAN v26 multilingual UI */
+/* VPNSTAN v27 multilingual UI */
 const I18N={
- fa:{dir:'rtl',title:'نمای کلی',sub:'مدیریت سرویس vpnstan · نسخه v26',badgeMaster:'پنل مادر',logout:'خروج',overview:'نمای کلی',clients:'کلاینت‌ها',configs:'کانفیگ‌ها',subscriptions:'اشتراک‌ها',dns:'DNS',settings:'تنظیمات',telegram:'ربات تلگرام',account:'حساب من',admin:'مدیریت پنل‌ها',online:'سرویس آنلاین',login:'ورود به پنل',loginDesc:'مدیریت مستقل کانفیگ‌ها، اشتراک‌ها و پنل‌های فرزند',username:'نام کاربری',password:'رمز عبور'},
- en:{dir:'ltr',title:'Overview',sub:'vpnstan service management · v26',badgeMaster:'Master Panel',logout:'Logout',overview:'Overview',clients:'Clients',configs:'Configs',subscriptions:'Subscriptions',dns:'DNS',settings:'Settings',account:'My Account',admin:'Panel Management',online:'Service Online',login:'Sign in',loginDesc:'Independent management of configs, subscriptions and child panels',username:'Username',password:'Password'}
+ fa:{dir:'rtl',title:'نمای کلی',sub:'مدیریت سرویس vpnstan · نسخه v27',badgeMaster:'پنل مادر',logout:'خروج',overview:'نمای کلی',clients:'کلاینت‌ها',configs:'کانفیگ‌ها',subscriptions:'اشتراک‌ها',dns:'DNS',settings:'تنظیمات',telegram:'ربات تلگرام',account:'حساب من',admin:'مدیریت پنل‌ها',online:'سرویس آنلاین',login:'ورود به پنل',loginDesc:'مدیریت مستقل کانفیگ‌ها، اشتراک‌ها و پنل‌های فرزند',username:'نام کاربری',password:'رمز عبور'},
+ en:{dir:'ltr',title:'Overview',sub:'vpnstan service management · v27',badgeMaster:'Master Panel',logout:'Logout',overview:'Overview',clients:'Clients',configs:'Configs',subscriptions:'Subscriptions',dns:'DNS',settings:'Settings',account:'My Account',admin:'Panel Management',online:'Service Online',login:'Sign in',loginDesc:'Independent management of configs, subscriptions and child panels',username:'Username',password:'Password'}
 };
 
 const STATIC_I18N={
@@ -52,7 +52,7 @@ applyTheme(localStorage.getItem('vpnstan_theme')||'dark');
 async function req(u,o={}){let r=await fetch(u,{credentials:'include',...o});let d;try{d=await r.json()}catch{d={msg:'خطای پاسخ سرور'}}if(!r.ok)throw Error(d.msg||'خطا');return d}
 const titles={dashboard:'نمای کلی',clients:'کلاینت‌ها',configs:'کانفیگ‌ها',subscriptions:'اشتراک‌ها',dns:'DNS',settings:'تنظیمات',telegram:'ربات تلگرام',account:'حساب من',admin:'مدیریت پنل‌ها'};
 function can(p){return !me||me.role==='admin'||me.panel_id===0||p==='overview'||p==='account'||me.permissions?.[p]}
-function applyPermissions(){document.querySelectorAll('.nav[data-perm]').forEach(n=>{const p=n.dataset.perm;let hide=false;if(p==='admin')hide=!(me?.role==='admin');else if(p==='telegram')hide=!(me?.role==='admin');else hide=!can(p);n.classList.toggle('hidden',hide)});if(me?.role==='admin'){document.getElementById('adminNav').classList.remove('hidden');$('telegramNav')?.classList.remove('hidden');$('masterOverview').classList.remove('hidden')}else{$('masterOverview').classList.add('hidden')}$('currentPanelBadge').textContent='v26';if($('headerUser'))$('headerUser').textContent=me?.username||'admin';if($('dropUsername'))$('dropUsername').textContent=me?.username||'admin';if($('dropRole'))$('dropRole').textContent=me?.role==='admin'?'مدیر / ادمین':'کاربر پنل'}
+function applyPermissions(){document.querySelectorAll('.nav[data-perm]').forEach(n=>{const p=n.dataset.perm;let hide=false;if(p==='admin')hide=!(me?.role==='admin');else if(p==='telegram')hide=!(me?.role==='admin');else hide=!can(p);n.classList.toggle('hidden',hide)});if(me?.role==='admin'){document.getElementById('adminNav').classList.remove('hidden');$('telegramNav')?.classList.remove('hidden');$('masterOverview').classList.remove('hidden')}else{$('masterOverview').classList.add('hidden')}$('currentPanelBadge').textContent='v27';if($('headerUser'))$('headerUser').textContent=me?.username||'admin';if($('dropUsername'))$('dropUsername').textContent=me?.username||'admin';if($('dropRole'))$('dropRole').textContent=me?.role==='admin'?'مدیر / ادمین':'کاربر پنل'}
 function openTab(id){const section=$(id);if(!section)return;const nav=document.querySelector(`.nav[data-tab="${id}"]`);if(nav&&nav.classList.contains('hidden'))return;document.querySelectorAll('.tab').forEach(x=>x.classList.add('hidden'));section.classList.remove('hidden');document.querySelectorAll('.nav').forEach(x=>x.classList.toggle('active',x.dataset.tab===id));$('title').textContent=titles[id]||id;if(id==='clients')renderClients();if(id==='configs')renderConfigs();if(id==='subscriptions')renderSubs();if(id==='dns')renderDns();if(id==='settings')loadSettings();if(id==='telegram')loadTelegram();if(id==='account')loadMe();if(id==='admin')loadPanels()}
 document.querySelectorAll('.nav').forEach(x=>x.addEventListener('click',()=>openTab(x.dataset.tab)));
 window.addEventListener('error',e=>{const el=$('loginMsg')||$('createMsg');if(el&&!e.message.includes('Script error'))el.textContent='خطای رابط پنل: '+e.message});
@@ -133,3 +133,31 @@ document.addEventListener('change',e=>{if(e.target?.id==='setTheme')applyTheme(e
 (async()=>{try{let d=await req('/api/me');if(d.authenticated)showApp()}catch{}})();
 
 document.addEventListener('click',e=>{if(!e.target.closest('.account-menu-wrap'))toggleUserMenu(false)});
+
+
+// ===== Full VPNSTAN v27 backup / restore =====
+async function downloadFullBackup(){
+  const msg=$('backupMsg'); if(msg) msg.textContent='در حال ساخت بکاپ کامل...';
+  try{
+    const r=await fetch('/api/backup/export',{credentials:'same-origin',cache:'no-store'});
+    if(!r.ok){let d={};try{d=await r.json()}catch(e){};throw new Error(d.msg||'ساخت بکاپ ناموفق بود')}
+    const blob=await r.blob();
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='VPNSTAN-v27-backup.vpnstan'; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+    if(msg) msg.textContent='✅ بکاپ کامل دانلود شد.';
+  }catch(e){if(msg) msg.textContent='❌ '+e.message}
+}
+async function restoreFullBackup(input){
+  const file=input.files&&input.files[0]; if(!file)return;
+  if(!confirm('با بازیابی بکاپ، اطلاعات فعلی پنل با اطلاعات داخل فایل جایگزین می‌شود. ادامه می‌دهی؟')){input.value='';return}
+  const msg=$('backupMsg'); if(msg) msg.textContent='در حال بررسی و بازیابی بکاپ...';
+  try{
+    const raw=await file.arrayBuffer();
+    const r=await fetch('/api/backup/import',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:raw,credentials:'same-origin'});
+    let d={};try{d=await r.json()}catch(e){}
+    if(!r.ok||!d.success)throw new Error(d.msg||'بازیابی ناموفق بود');
+    if(msg) msg.textContent='✅ بکاپ بازیابی شد. برای ورود با اطلاعات بکاپ، صفحه را دوباره باز کن.';
+    setTimeout(async()=>{try{await req('/api/logout',{method:'POST'})}catch(e){} location.reload()},1200);
+  }catch(e){if(msg) msg.textContent='❌ '+e.message}
+  finally{input.value=''}
+}

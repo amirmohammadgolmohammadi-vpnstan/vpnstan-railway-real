@@ -57,7 +57,7 @@ html[data-theme="dark"] .ghost,html[data-theme="blue"] .ghost,html[data-theme="p
 html[data-theme="dark"] .permission-box,html[data-theme="blue"] .permission-box,html[data-theme="purple"] .permission-box{color:var(--text)}
 @media(max-width:650px){.permission-box,.mini-grid{grid-template-columns:1fr}.panel-row{align-items:flex-start;flex-direction:column}.header-actions{gap:4px}.nav small{display:inline;margin-right:5px}}
 
-/* VPNSTAN v26 — premium UI refresh */
+/* VPNSTAN v27 — premium UI refresh */
 :root{
  --primary:#2563eb;--primary2:#06b6d4;--accent:#38bdf8;
  --radius:14px;--shadow:0 14px 45px rgba(15,23,42,.08)
@@ -88,14 +88,14 @@ header #title{font-size:19px} .tab{padding:30px 32px 55px}
 html[data-theme="dark"] body,html[data-theme="blue"] body,html[data-theme="purple"] body{background:radial-gradient(circle at 90% 0%,rgba(91,114,255,.13),transparent 30%),var(--bg)}
 @media(max-width:650px){.tab{padding:20px 15px 35px}.cards-list{grid-template-columns:1fr}.sub-summary{grid-template-columns:1fr 1fr}.sub-summary>div:last-child{grid-column:1/-1}}
 
-/* v26 premium language switch */
+/* v27 premium language switch */
 .lang-switch{display:flex;align-items:center;gap:6px;height:38px;padding:0 8px;border:1px solid var(--line);border-radius:10px;background:var(--panel2);color:var(--muted)}
 .lang-switch span{font-size:15px}.lang-switch select{border:0;outline:0;background:transparent;color:var(--text);font:inherit;font-size:11px;cursor:pointer}.lang-switch option{color:#111;background:#fff}.login-lang{margin-top:12px;text-align:center}.login-lang .ghost{width:100%}
 html[dir="ltr"] .app aside{border-right:0;border-left:1px solid var(--line)}
 html[dir="ltr"] .nav.active{box-shadow:inset 3px 0 var(--primary),0 5px 18px rgba(37,99,235,.06)}
 html[dir="ltr"] .hero:after{left:auto;right:-70px}
 
-/* VPNSTAN V26 — premium dashboard skin inspired by the supplied reference */
+/* VPNSTAN V27 — premium dashboard skin inspired by the supplied reference */
 :root{
   --bg:#060d1b;--panel:#0b1527;--panel2:#0e1b30;--line:#1a2b45;--text:#eef4ff;--muted:#8fa2bf;
   --primary:#2f7bff;--primary2:#1656d9;--good:#18d6a3;--danger:#ff5c70;--sidebar:#071122;

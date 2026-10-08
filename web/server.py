@@ -1,4 +1,4 @@
-import base64, hmac, json, os, secrets, sqlite3, subprocess, time, uuid, urllib.parse, threading, re, io, html, socket, urllib.request
+import base64, hmac, json, os, secrets, sqlite3, subprocess, time, uuid, urllib.parse, threading, re, io, html, socket, urllib.request, tempfile, shutil
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 WEB=os.environ.get('VPNSTAN_WEB','/opt/vpnstan/web')
@@ -16,7 +16,7 @@ XRAY_INBOUND_PORT=int(os.environ.get('XRAY_INBOUND_PORT','10000'))
 XRAY_VMESS_PORT=int(os.environ.get('XRAY_VMESS_PORT','10001'))
 DEFAULT_VMESS_PATH=os.environ.get('VPNSTAN_VMESS_PATH','/vmess')
 XRAY_API_ADDR=os.environ.get('XRAY_API_ADDR','127.0.0.1:10085')
-PANEL_VERSION='v26'
+PANEL_VERSION='v27'
 DNS_LISTEN_HOST=os.environ.get('VPNSTAN_DNS_LISTEN_HOST','127.0.0.1')
 DNS_LISTEN_PORT=int(os.environ.get('VPNSTAN_DNS_LISTEN_PORT','5353'))
 DNS_TCP_PORT=int(os.environ.get('VPNSTAN_DNS_TCP_PORT','5354'))
@@ -176,6 +176,14 @@ def init_db():
     status TEXT NOT NULL DEFAULT 'awaiting_payment',
     created_at INTEGER NOT NULL
 )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS telegram_wallet_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_user_id INTEGER NOT NULL,
+    amount REAL NOT NULL,
+    kind TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+)''')
     c.execute('''CREATE TABLE IF NOT EXISTS telegram_users(
       telegram_user_id INTEGER PRIMARY KEY, username TEXT NOT NULL DEFAULT '', first_name TEXT NOT NULL DEFAULT '',
       wallet REAL NOT NULL DEFAULT 0, referral_code TEXT NOT NULL DEFAULT '', referred_by INTEGER NOT NULL DEFAULT 0,
@@ -198,7 +206,9 @@ def init_db():
         c.execute('INSERT INTO panel_users(username,password_hash,role,enabled,created_at) VALUES(?,?,?,?,?)',(USERNAME,ph,'admin',1,int(time.time())))
     defaults={'node_host':DEFAULT_HOST,'node_port':str(DEFAULT_PORT),'ws_path':DEFAULT_PATH,'vmess_path':DEFAULT_VMESS_PATH,'xhttp_path':'/xhttp','grpc_service':'vpnstan','grpc_path':'/grpc','httpupgrade_path':'/upgrade','vmess_xhttp_path':'/vmess-xhttp','vmess_grpc_path':'/vmess-grpc','vmess_httpupgrade_path':'/vmess-upgrade','trojan_ws_path':'/trojan','trojan_xhttp_path':'/trojan-xhttp','trojan_grpc_path':'/trojan-grpc','trojan_httpupgrade_path':'/trojan-upgrade','sub_path':SUB_PATH,
               'panel_title':'vpnstan','support_url':'','dns_server':'1.1.1.1,1.0.0.1','dns_profile':'cloudflare','wg_endpoint':'','wg_server_public_key':'','announce':'اشتراک vpnstan — برای دریافت آخرین کانفیگ، لینک اشتراک را به‌روزرسانی کنید.','update_interval':'1','theme':'dark','telegram_token':'','telegram_admin_id':'','telegram_enabled':'0','telegram_plans':json.dumps([{'name':'50GB / 30 روز','gb':50,'days':30,'price':''}],ensure_ascii=False),'telegram_payment_text':'پس از پرداخت، روی «پرداخت کردم» بزنید تا سفارش برای ادمین ارسال شود. پرداخت به‌صورت دستی بررسی می‌شود.',
-              'telegram_trial_enabled':'1','telegram_trial_gb':'1','telegram_trial_days':'1','telegram_referral_reward':'1','telegram_support_text':'برای پشتیبانی پیام خود را ارسال کنید.','telegram_mandatory_channel':'','telegram_welcome_text':'به فروشگاه VPNSTAN خوش آمدید.','telegram_card_number':'','telegram_card_name':''}
+              'telegram_trial_enabled':'1','telegram_trial_gb':'1','telegram_trial_days':'1','telegram_referral_reward':'1','telegram_support_text':'برای پشتیبانی پیام خود را ارسال کنید.','telegram_mandatory_channel':'','telegram_welcome_text':'به فروشگاه VPNSTAN خوش آمدید.','telegram_card_number':'','telegram_card_name':'',
+              'telegram_renew_7_price':'30000','telegram_renew_30_price':'100000','telegram_renew_90_price':'250000',
+              'telegram_add_5_price':'30000','telegram_add_10_price':'50000','telegram_add_25_price':'100000'}
     for k,v in defaults.items(): c.execute('INSERT OR IGNORE INTO settings(k,v) VALUES(?,?)',(k,v))
     c.commit(); c.close()
 
@@ -247,118 +257,48 @@ def fmt_date(ts):
     return time.strftime('%Y/%m/%d %H:%M',time.localtime(ts))
 
 def collect_xray_stats():
-    # Read Xray cumulative user counters and persist their deltas.
-    # We intentionally query both the bulk API and each user API so a
-    # partially-populated statsquery response cannot make usage appear as 0.
-    if not os.path.exists(XRAY_BIN):
-        return
-    c=db()
-    clients=c.execute('SELECT id,uuid FROM clients').fetchall()
-    c.close()
-    if not clients:
-        return
-
-    stats={}
-    errors=[]
+    # Poll Xray's cumulative per-user counters every second and persist deltas.
+    if not os.path.exists(XRAY_BIN): return
     try:
-        proc=subprocess.run(
-            [XRAY_BIN,'api','statsquery','--server='+XRAY_API_ADDR],
-            stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=5,check=False
-        )
-        if proc.returncode==0:
-            data=json.loads((proc.stdout or b'{}').decode('utf-8','replace'))
-            for item in data.get('stat',[]) or []:
-                name=str(item.get('name',''))
-                try: value=int(item.get('value',0) or 0)
-                except Exception: value=0
-                m=re.match(r'^user>>>(.+)>>>traffic>>>(uplink|downlink)$',name)
-                if m:
-                    email,kind=m.group(1),m.group(2)
-                    stats.setdefault(email,{'upload':0,'download':0})['upload' if kind=='uplink' else 'download']=value
-        else:
-            errors.append('statsquery: '+(proc.stderr or b'').decode('utf-8','replace')[-1000:])
-    except Exception as e:
-        errors.append('statsquery exception: '+repr(e))
-
-    # Always perform a per-client lookup as a second source of truth.
-    # This also handles Xray versions where statsquery does not return all
-    # user records, while keeping the normal bulk query fast.
-    for cr in clients:
-        email='vpnstan-'+str(cr['uuid'])
-        one=stats.get(email,{'upload':0,'download':0})
-        for kind in ('uplink','downlink'):
+        proc=subprocess.run([XRAY_BIN,'api','statsquery','--server='+XRAY_API_ADDR],stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=5,check=False)
+        if proc.returncode != 0:
             try:
-                q=subprocess.run(
-                    [XRAY_BIN,'api','stats','--server='+XRAY_API_ADDR,
-                     '-name='+f'user>>>{email}>>>traffic>>>{kind}'],
-                    stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=3,check=False
-                )
-                if q.returncode != 0:
-                    q=subprocess.run(
-                        [XRAY_BIN,'api','stats','--server='+XRAY_API_ADDR,
-                         '--name='+f'user>>>{email}>>>traffic>>>{kind}'],
-                        stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=3,check=False
-                    )
-                if q.returncode==0:
-                    txt=q.stdout.decode('utf-8','replace')
-                    # Xray returns {"name":"...","value":"123"}.
-                    # Accept quoted or numeric values and whitespace/newlines.
-                    matches=re.findall(r'"value"\s*:\s*"?(\d+)"?',txt)
-                    if matches:
-                        one['upload' if kind=='uplink' else 'download']=int(matches[-1])
-                    else:
-                        # Some Xray builds return the value as a protobuf-ish
-                        # field without JSON formatting. Extract the last number
-                        # only when the requested record name is present.
-                        if f'user>>>{email}>>>traffic>>>{kind}' in txt:
-                            nums=re.findall(r'(?<![A-Za-z])\d+(?![A-Za-z])',txt)
-                            if nums:
-                                one['upload' if kind=='uplink' else 'download']=int(nums[-1])
-                elif email not in stats:
-                    errors.append(f'{email}/{kind}: '+q.stderr.decode('utf-8','replace')[-500:])
-            except Exception as e:
-                errors.append(f'{email}/{kind}: {e!r}')
-        stats[email]=one
-
-    if errors:
+                with open('/opt/vpnstan/data/xray-stats.log','ab') as f: f.write((proc.stderr or b'')[-4000:]+b"\n")
+            except Exception: pass
+            return
+        data=json.loads((proc.stdout or b'{}').decode('utf-8','replace'))
+    except Exception as e:
         try:
-            with open('/opt/vpnstan/data/xray-stats.log','a',encoding='utf-8') as f:
-                f.write(time.strftime('%Y-%m-%d %H:%M:%S ')+'\n'.join(errors[-20:])+'\n')
-        except Exception:
-            pass
-
+            with open('/opt/vpnstan/data/xray-stats.log','a',encoding='utf-8') as f: f.write(str(e)+'\n')
+        except Exception: pass
+        return
+    stats={}
+    for item in data.get('stat',[]) or []:
+        name=str(item.get('name','')); value=int(item.get('value',0) or 0)
+        m=re.match(r'^user>>>(.+)>>>traffic>>>(uplink|downlink)$',name)
+        if m:
+            email,kind=m.group(1),m.group(2)
+            stats.setdefault(email,{'upload':0,'download':0})[kind]=value
+    if not stats: return
     c=db(); now=int(time.time())
-    for r in clients:
-        st=stats.get('vpnstan-'+str(r['uuid']))
-        if not st:
-            # Last-resort match: some Xray integrations can alter the email
-            # prefix, but the generated UUID is still present in the name.
-            for k,v in stats.items():
-                if str(r['uuid']) in k:
-                    st=v; break
-        if not st:
-            continue
+    rows=c.execute('SELECT id,uuid FROM clients').fetchall()
+    for r in rows:
+        st=stats.get('vpnstan-'+r['uuid']) or stats.get(r['uuid'])
+        if not st: continue
         old=c.execute('SELECT upload,download,last_seen,raw_upload,raw_download FROM traffic WHERE client_id=?',(r['id'],)).fetchone()
-        cur_u=max(0,int(st.get('upload',0))); cur_d=max(0,int(st.get('download',0)))
         if not old:
-            # The first observed Xray counter is real traffic; do not throw it
-            # away. This was the main reason a fresh subscription could remain 0.
-            total_u=cur_u; total_d=cur_d; last=now if (cur_u or cur_d) else 0
+            total_u=0; total_d=0; delta_u=0; delta_d=0; last=0
         else:
-            old_u=int(old['raw_upload']); old_d=int(old['raw_download'])
-            delta_u=cur_u-old_u if cur_u>=old_u else cur_u
-            delta_d=cur_d-old_d if cur_d>=old_d else cur_d
-            total_u=int(old['upload'])+max(0,delta_u)
-            total_d=int(old['download'])+max(0,delta_d)
-            last=now if (delta_u or delta_d) else int(old['last_seen'])
-        c.execute("INSERT INTO traffic(client_id,upload,download,last_seen,raw_upload,raw_download) VALUES(?,?,?,?,?,?) ON CONFLICT(client_id) DO UPDATE SET upload=excluded.upload,download=excluded.download,last_seen=excluded.last_seen,raw_upload=excluded.raw_upload,raw_download=excluded.raw_download",(r['id'],total_u,total_d,last,cur_u,cur_d))
-
-    # Enforce the configured quota after updating usage.
+            raw_u=int(old['raw_upload']); raw_d=int(old['raw_download'])
+            delta_u=(st['upload']-raw_u) if st['upload']>=raw_u else st['upload']
+            delta_d=(st['download']-raw_d) if st['download']>=raw_d else st['download']
+            total_u=int(old['upload'])+max(0,delta_u); total_d=int(old['download'])+max(0,delta_d)
+            last=now if delta_u+delta_d>0 else int(old['last_seen'])
+        c.execute("INSERT INTO traffic(client_id,upload,download,last_seen,raw_upload,raw_download) VALUES(?,?,?,?,?,?) ON CONFLICT(client_id) DO UPDATE SET upload=excluded.upload,download=excluded.download,last_seen=excluded.last_seen,raw_upload=excluded.raw_upload,raw_download=excluded.raw_download",(r['id'],total_u,total_d,last,st['upload'],st['download']))
     c.commit()
     rows=c.execute('SELECT id,gb,expiry_at,enabled FROM clients').fetchall()
     for r in rows:
-        if not r['enabled'] or (r['expiry_at'] and r['expiry_at']<=now):
-            continue
+        if not r['enabled'] or (r['expiry_at'] and r['expiry_at']<=now): continue
         tr=c.execute('SELECT upload,download FROM traffic WHERE client_id=?',(r['id'],)).fetchone()
         if tr and int(tr['upload'])+int(tr['download']) >= float(r['gb'])*1024**3:
             c.execute('UPDATE clients SET enabled=0 WHERE id=?',(r['id'],))
@@ -394,11 +334,9 @@ def write_xray_config():
             elif transport=='grpc': stream['grpcSettings']={'serviceName':svc,'multiMode':False}
             elif transport=='httpupgrade': stream['httpupgradeSettings']={'path':path}
             inbounds.append({'tag':f'{proto}-{transport}','listen':'127.0.0.1','port':port_map[(proto,transport)],'protocol':proto,'settings':settings_obj,'streamSettings':stream})
-    # Use Xray's simplified API mode. It binds StatsService directly to the
-    # local API socket, which avoids depending on a tunnel inbound/routing
-    # pair and makes `xray api statsquery` reliably available to the panel.
-    api_host, api_port = XRAY_API_ADDR.rsplit(':',1)
-    cfg={'log':{'loglevel':'warning'},'api':{'tag':'api','listen':api_host+':'+str(api_port),'services':['StatsService']},'stats':{},'policy':{'levels':{'0':{'statsUserUplink':True,'statsUserDownlink':True,'statsUserOnline':True}},'system':{'statsInboundUplink':True,'statsInboundDownlink':True,'statsOutboundUplink':True,'statsOutboundDownlink':True}},'inbounds':inbounds,'outbounds':[{'protocol':'freedom','tag':'direct'},{'protocol':'blackhole','tag':'block'}]}
+    api_port=int(XRAY_API_ADDR.rsplit(':',1)[-1])
+    api_inbound={'tag':'api','listen':'127.0.0.1','port':api_port,'protocol':'dokodemo-door','settings':{'address':'127.0.0.1'}}
+    cfg={'log':{'loglevel':'warning'},'api':{'tag':'api','services':['StatsService']},'stats':{},'policy':{'levels':{'0':{'statsUserUplink':True,'statsUserDownlink':True,'statsUserOnline':True}},'system':{'statsInboundUplink':True,'statsInboundDownlink':True,'statsOutboundUplink':True,'statsOutboundDownlink':True}},'inbounds':[api_inbound]+inbounds,'routing':{'rules':[{'type':'field','inboundTag':['api'],'outboundTag':'api'}]},'outbounds':[{'protocol':'freedom','tag':'direct'},{'protocol':'blackhole','tag':'block'}]}
     tmp=XRAY_CONFIG+'.tmp'
     with open(tmp,'w',encoding='utf-8') as f: json.dump(cfg,f,ensure_ascii=False,indent=2)
     os.replace(tmp,XRAY_CONFIG); return cfg
@@ -452,6 +390,77 @@ def send(h,status,obj,extra=None):
     raw=json.dumps(obj,ensure_ascii=False).encode(); h.send_response(status); h.send_header('Content-Type','application/json; charset=utf-8'); h.send_header('Content-Length',str(len(raw))); h.send_header('Cache-Control','no-store')
     for k,v in (extra or {}).items(): h.send_header(k,v)
     h.end_headers(); h.wfile.write(raw)
+
+def export_backup_bytes():
+    """Create one portable backup file containing the complete panel database.
+    The SQLite database holds clients, traffic, settings, Telegram data, wallets,
+    child panels and login accounts. Xray is regenerated from the restored DB/settings.
+    """
+    os.makedirs(os.path.dirname(DB), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix='vpnstan-backup-', suffix='.db')
+    os.close(fd)
+    try:
+        src=sqlite3.connect(DB)
+        try:
+            try: src.execute('PRAGMA wal_checkpoint(FULL)')
+            except Exception: pass
+            dst=sqlite3.connect(tmp)
+            src.backup(dst)
+            dst.commit(); dst.close()
+        finally:
+            src.close()
+        raw=open(tmp,'rb').read()
+        payload={
+            'format':'VPNSTAN_BACKUP',
+            'backup_version':1,
+            'panel_version':PANEL_VERSION,
+            'created_at':int(time.time()),
+            'database_base64':base64.b64encode(raw).decode('ascii')
+        }
+        return json.dumps(payload,ensure_ascii=False,separators=(',',':')).encode('utf-8')
+    finally:
+        try: os.remove(tmp)
+        except OSError: pass
+
+def import_backup_bytes(raw):
+    payload=json.loads(raw.decode('utf-8'))
+    if payload.get('format')!='VPNSTAN_BACKUP': raise ValueError('این فایل بکاپ VPNSTAN نیست.')
+    if int(payload.get('backup_version',0))!=1: raise ValueError('نسخه بکاپ پشتیبانی نمی‌شود.')
+    b64=payload.get('database_base64','')
+    if not b64: raise ValueError('دیتابیس داخل بکاپ وجود ندارد.')
+    dbraw=base64.b64decode(b64,validate=True)
+    if len(dbraw)>100*1024*1024: raise ValueError('حجم بکاپ بیش از حد مجاز است.')
+    fd,tmp=tempfile.mkstemp(prefix='vpnstan-restore-', suffix='.db')
+    os.close(fd)
+    try:
+        open(tmp,'wb').write(dbraw)
+        c=sqlite3.connect(tmp)
+        try:
+            ok=c.execute('PRAGMA integrity_check').fetchone()[0]
+            if str(ok).lower()!='ok': raise ValueError('دیتابیس بکاپ سالم نیست.')
+            tables={r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            required={'clients','settings','panel_users'}
+            missing=required-tables
+            if missing: raise ValueError('ساختار بکاپ ناقص است: '+', '.join(sorted(missing)))
+        finally: c.close()
+        # Keep a safety copy of the current DB until the new DB is verified.
+        live_tmp=DB+'.before-restore'
+        try: shutil.copy2(DB,live_tmp)
+        except Exception: pass
+        try:
+            os.replace(tmp,DB)
+        except Exception:
+            # Fallback for filesystems where replace is unavailable.
+            shutil.copy2(tmp,DB)
+        for suffix in ('-wal','-shm'):
+            try: os.remove(DB+suffix)
+            except OSError: pass
+        try: os.remove(live_tmp)
+        except OSError: pass
+        return payload
+    finally:
+        try: os.remove(tmp)
+        except OSError: pass
 
 def clean_host(v): return (v or '').split(':',1)[0].strip()
 def host_for(h,s):
@@ -578,6 +587,11 @@ def tg_send(chat_id,text,keyboard=None):
     if keyboard: payload['reply_markup']={'inline_keyboard':keyboard}
     return tg_api('sendMessage',payload,25)
 
+def tg_send_photo(chat_id,photo,caption='',keyboard=None):
+    payload={'chat_id':chat_id,'photo':photo,'caption':caption,'parse_mode':'HTML'}
+    if keyboard: payload['reply_markup']={'inline_keyboard':keyboard}
+    return tg_api('sendPhoto',payload,25)
+
 def tg_edit(chat_id,message_id,text,keyboard=None):
     payload={'chat_id':chat_id,'message_id':message_id,'text':text,'parse_mode':'HTML','disable_web_page_preview':True}
     if keyboard: payload['reply_markup']={'inline_keyboard':keyboard}
@@ -611,7 +625,8 @@ def tg_admin_keyboard():
         [{'text':'📦 سرویس‌ها','callback_data':'admin_services'},{'text':'🧾 سفارش‌ها','callback_data':'admin_orders'}],
         [{'text':'💰 پرداخت‌ها','callback_data':'admin_payments'},{'text':'💳 شماره کارت','callback_data':'admin_card'}],
         [{'text':'🛒 پلن‌ها','callback_data':'admin_plans'},{'text':'🎫 تیکت‌ها','callback_data':'admin_tickets'}],
-        [{'text':'⚙️ تنظیمات','callback_data':'admin_settings'},{'text':'📢 پیام همگانی','callback_data':'admin_broadcast'}],
+        [{'text':'💰 قیمت تمدید/حجم','callback_data':'admin_prices'},{'text':'⚙️ تنظیمات','callback_data':'admin_settings'}],
+        [{'text':'📢 پیام همگانی','callback_data':'admin_broadcast'}],
         [{'text':'🏠 منوی اصلی','callback_data':'home'}]
     ]
 
@@ -637,6 +652,77 @@ def tg_wallet_charge(uid, amount):
 
 def tg_wallet(uid):
     c=db(); r=c.execute('SELECT wallet FROM telegram_users WHERE telegram_user_id=?',(uid,)).fetchone(); c.close(); return float(r['wallet']) if r else 0.0
+
+def tg_price(key, fallback=0):
+    try: return max(0, int(float(settings().get(key, fallback) or fallback)))
+    except Exception: return int(fallback)
+
+def tg_apply_paid_change(uid, cid, kind, amount):
+    """Atomically charge wallet and apply a renewal/volume change to the owned service."""
+    amount=float(amount)
+    if amount <= 0: return False, 'قیمت این عملیات تنظیم نشده است.', 0
+    c=db()
+    try:
+        c.execute('BEGIN IMMEDIATE')
+        u=c.execute('SELECT wallet FROM telegram_users WHERE telegram_user_id=?',(uid,)).fetchone()
+        r=c.execute("SELECT c.* FROM clients c JOIN telegram_orders o ON o.client_id=c.id WHERE c.id=? AND o.telegram_user_id=? AND o.status='approved' ORDER BY o.id DESC LIMIT 1",(cid,uid)).fetchone()
+        if not u or not r:
+            c.rollback(); return False,'سرویس پیدا نشد.',0
+        wallet=float(u['wallet'])
+        if wallet < amount:
+            c.rollback(); return False,f'موجودی کافی نیست. موجودی فعلی: {tg_money(wallet)} تومان',wallet
+        now=int(time.time())
+        if kind=='renew':
+            days=int(amount and 0)  # replaced by caller through the temporary field below
+        c.execute('UPDATE telegram_users SET wallet=wallet-? WHERE telegram_user_id=?',(amount,uid))
+        c.execute('INSERT INTO telegram_wallet_transactions(telegram_user_id,amount,kind,description,created_at) VALUES(?,?,?,?,?)',(uid,-amount,kind,kind,int(time.time())))
+        c.commit()
+        return True,'',wallet-amount
+    except Exception as e:
+        try:c.rollback()
+        except Exception:pass
+        return False,str(e),0
+    finally:
+        c.close()
+
+def tg_charge_and_renew(uid, cid, days, price):
+    c=db()
+    try:
+        c.execute('BEGIN IMMEDIATE')
+        u=c.execute('SELECT wallet FROM telegram_users WHERE telegram_user_id=?',(uid,)).fetchone()
+        r=c.execute("SELECT c.* FROM clients c JOIN telegram_orders o ON o.client_id=c.id WHERE c.id=? AND o.telegram_user_id=? AND o.status='approved' ORDER BY o.id DESC LIMIT 1",(cid,uid)).fetchone()
+        if not u or not r: c.rollback(); return False,'سرویس پیدا نشد.',0,0
+        wallet=float(u['wallet']); price=float(price)
+        if wallet < price: c.rollback(); return False,f'موجودی کافی نیست. موجودی: {tg_money(wallet)} تومان',wallet,price
+        base=max(int(r['expiry_at']),int(time.time())); newexp=base+int(days)*86400
+        c.execute('UPDATE clients SET expiry_at=?,enabled=1 WHERE id=?',(newexp,cid))
+        c.execute('UPDATE telegram_users SET wallet=wallet-? WHERE telegram_user_id=?',(price,uid))
+        c.execute('INSERT INTO telegram_wallet_transactions(telegram_user_id,amount,kind,description,created_at) VALUES(?,?,?,?,?)',(uid,-price,'renew',f'{days} روز تمدید سرویس #{cid}',int(time.time())))
+        c.commit(); return True,'',wallet-price,price
+    except Exception as e:
+        try:c.rollback()
+        except Exception:pass
+        return False,str(e),0,price
+    finally:c.close()
+
+def tg_charge_and_add_volume(uid, cid, gb, price):
+    c=db()
+    try:
+        c.execute('BEGIN IMMEDIATE')
+        u=c.execute('SELECT wallet FROM telegram_users WHERE telegram_user_id=?',(uid,)).fetchone()
+        r=c.execute("SELECT c.* FROM clients c JOIN telegram_orders o ON o.client_id=c.id WHERE c.id=? AND o.telegram_user_id=? AND o.status='approved' ORDER BY o.id DESC LIMIT 1",(cid,uid)).fetchone()
+        if not u or not r: c.rollback(); return False,'سرویس پیدا نشد.',0,0
+        wallet=float(u['wallet']); price=float(price)
+        if wallet < price: c.rollback(); return False,f'موجودی کافی نیست. موجودی: {tg_money(wallet)} تومان',wallet,price
+        c.execute('UPDATE clients SET gb=gb+? WHERE id=?',(float(gb),cid))
+        c.execute('UPDATE telegram_users SET wallet=wallet-? WHERE telegram_user_id=?',(price,uid))
+        c.execute('INSERT INTO telegram_wallet_transactions(telegram_user_id,amount,kind,description,created_at) VALUES(?,?,?,?,?)',(uid,-price,'add_volume',f'+{gb:g} GB برای سرویس #{cid}',int(time.time())))
+        c.commit(); return True,'',wallet-price,price
+    except Exception as e:
+        try:c.rollback()
+        except Exception:pass
+        return False,str(e),0,price
+    finally:c.close()
 
 def tg_plans():
     try:
@@ -718,11 +804,11 @@ def tg_handle_callback(cb):
         except: tg_answer(cb.get('id',''),'درخواست نامعتبر است'); return
         c=db(); order=c.execute('SELECT * FROM telegram_wallet_orders WHERE id=? AND telegram_user_id=?',(oid,uid)).fetchone(); c.close()
         if not order: tg_answer(cb.get('id',''),'درخواست پیدا نشد'); return
-        if order['status']!='awaiting_payment': tg_answer(cb.get('id',''),'این درخواست قبلاً ثبت شده است'); return
-        c=db(); c.execute("UPDATE telegram_wallet_orders SET status='pending_admin' WHERE id=?",(oid,)); c.commit(); c.close()
-        if admin:
-            tg_send(admin,f"<b>💳 درخواست شارژ کیف پول</b>\n\nکاربر: <code>{uid}</code>\nمبلغ: <b>{tg_money(order['amount'])} تومان</b>\nدرخواست: <code>#{oid}</code>",[[{'text':'✅ تأیید شارژ','callback_data':f'wallet_approve:{oid}'},{'text':'❌ رد','callback_data':f'wallet_reject:{oid}'}]])
-        tg_answer(cb.get('id',''),'درخواست برای ادمین ارسال شد'); tg_edit(chat_id,mid,f"⏳ درخواست شارژ <b>#{oid}</b> ثبت شد.\n\nمبلغ: <b>{tg_money(order['amount'])} تومان</b>\nبعد از بررسی پرداخت، موجودی کیف پولت اضافه می‌شود.",[[{'text':'💳 کیف پول','callback_data':'wallet'},{'text':'🏠 منوی اصلی','callback_data':'home'}]]); return
+        if order['status'] not in ('awaiting_payment','awaiting_receipt'): tg_answer(cb.get('id',''),'این درخواست قبلاً ثبت شده است'); return
+        c=db(); c.execute("UPDATE telegram_wallet_orders SET status='awaiting_receipt' WHERE id=?",(oid,)); c.commit(); c.close()
+        tg_answer(cb.get('id',''),'رسید را ارسال کن')
+        tg_send(chat_id,f"<b>🧾 ارسال رسید شارژ #{oid}</b>\n\nمبلغ: <b>{tg_money(order['amount'])} تومان</b>\n\nحالا <b>عکس رسید پرداخت</b> را همینجا به‌صورت Photo ارسال کن.\nبعد از دریافت عکس، رسید به‌همراه مشخصات سفارش برای ادمین فرستاده می‌شود.",[[{'text':'❌ لغو','callback_data':'wallet'}]])
+        return
     if data.startswith('wallet_approve:') or data.startswith('wallet_reject:'):
         if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین مجاز است'); return
         action,raw=data.split(':',1)
@@ -769,19 +855,45 @@ def tg_handle_callback(cb):
         if not r: tg_answer(cb.get('id',''),'سرویس پیدا نشد'); return
         tg_answer(cb.get('id',''))
         if data.startswith('renew:'):
-            tg_edit(chat_id,mid,'<b>🔄 تمدید سرویس</b>\n\nمدت تمدید را انتخاب کن:',[[{'text':'➕ 7 روز','callback_data':f'renewdays:{cid}:7'},{'text':'➕ 30 روز','callback_data':f'renewdays:{cid}:30'}],[{'text':'➕ 90 روز','callback_data':f'renewdays:{cid}:90'}],[{'text':'🔙 بازگشت','callback_data':f'service:{cid}'}]])
+            p7=tg_price('telegram_renew_7_price',30000); p30=tg_price('telegram_renew_30_price',100000); p90=tg_price('telegram_renew_90_price',250000)
+            tg_edit(chat_id,mid,'<b>🔄 تمدید سرویس</b>\n\nمدت و قیمت را انتخاب کن:',[[{'text':f'➕ 7 روز · {tg_money(p7)} تومان','callback_data':f'renewdays:{cid}:7'},{'text':f'➕ 30 روز · {tg_money(p30)} تومان','callback_data':f'renewdays:{cid}:30'}],[{'text':f'➕ 90 روز · {tg_money(p90)} تومان','callback_data':f'renewdays:{cid}:90'}],[{'text':'🔙 بازگشت','callback_data':f'service:{cid}'}]])
         else:
-            tg_edit(chat_id,mid,'<b>➕ حجم اضافه</b>\n\nحجم اضافه را انتخاب کن:',[[{'text':'+5 GB','callback_data':f'addgb:{cid}:5'},{'text':'+10 GB','callback_data':f'addgb:{cid}:10'}],[{'text':'+25 GB','callback_data':f'addgb:{cid}:25'}],[{'text':'🔙 بازگشت','callback_data':f'service:{cid}'}]])
+            p5=tg_price('telegram_add_5_price',30000); p10=tg_price('telegram_add_10_price',50000); p25=tg_price('telegram_add_25_price',100000)
+            tg_edit(chat_id,mid,'<b>➕ حجم اضافه</b>\n\nحجم و قیمت را انتخاب کن:',[[{'text':f'+5 GB · {tg_money(p5)} تومان','callback_data':f'addgb:{cid}:5'},{'text':f'+10 GB · {tg_money(p10)} تومان','callback_data':f'addgb:{cid}:10'}],[{'text':f'+25 GB · {tg_money(p25)} تومان','callback_data':f'addgb:{cid}:25'}],[{'text':'🔙 بازگشت','callback_data':f'service:{cid}'}]])
         return
     if data.startswith('renewdays:') or data.startswith('addgb:'):
-        parts=data.split(':'); cid=int(parts[1]); amount=float(parts[2]); rows=tg_user_clients(uid); r=next((x for x in rows if int(x['id'])==cid),None)
+        parts=data.split(':'); cid=int(parts[1]); value=float(parts[2]); rows=tg_user_clients(uid); r=next((x for x in rows if int(x['id'])==cid),None)
         if not r: tg_answer(cb.get('id',''),'سرویس پیدا نشد'); return
-        c=db()
         if data.startswith('renewdays:'):
-            base=max(int(r['expiry_at']),int(time.time())); newexp=base+int(amount)*86400; c.execute('UPDATE clients SET expiry_at=?,enabled=1 WHERE id=?',(newexp,cid)); msg=f'✅ {int(amount)} روز به سرویس اضافه شد.'
+            price={7:tg_price('telegram_renew_7_price',30000),30:tg_price('telegram_renew_30_price',100000),90:tg_price('telegram_renew_90_price',250000)}.get(int(value),0)
+            label=f'{int(value)} روز تمدید'
+            confirm=f'renewconfirm:{cid}:{int(value)}'
         else:
-            c.execute('UPDATE clients SET gb=gb+? WHERE id=?',(amount,cid)); msg=f'✅ {amount:g} GB به سرویس اضافه شد.'
-        c.commit(); c.close(); restart_xray(); tg_answer(cb.get('id',''),msg); tg_edit(chat_id,mid,msg,[[{'text':'📦 مشاهده سرویس','callback_data':f'service:{cid}'}],[{'text':'🏠 منوی اصلی','callback_data':'home'}]]); return
+            price={5:tg_price('telegram_add_5_price',30000),10:tg_price('telegram_add_10_price',50000),25:tg_price('telegram_add_25_price',100000)}.get(int(value),0)
+            label=f'{value:g} GB حجم اضافه'
+            confirm=f'addvolconfirm:{cid}:{value:g}'
+        wallet=tg_wallet(uid)
+        enough=wallet>=price
+        text=f'<b>تأیید عملیات</b>\n\n{label}\nهزینه: <b>{tg_money(price)} تومان</b>\nموجودی فعلی: <b>{tg_money(wallet)} تومان</b>\nموجودی پس از پرداخت: <b>{tg_money(wallet-price)} تومان</b>' if enough else f'<b>❌ موجودی کافی نیست</b>\n\n{label}\nهزینه: <b>{tg_money(price)} تومان</b>\nموجودی فعلی: <b>{tg_money(wallet)} تومان</b>\n\nابتدا کیف پول را شارژ کن.'
+        kb=[[{'text':'✅ تأیید و پرداخت','callback_data':confirm}]] if enough else [[{'text':'💳 شارژ کیف پول','callback_data':'wallet_topup'}]]
+        kb.append([{'text':'🔙 بازگشت به سرویس','callback_data':f'service:{cid}'}])
+        tg_answer(cb.get('id','')); tg_edit(chat_id,mid,text,kb); return
+    if data.startswith('renewconfirm:'):
+        try: _,cid_s,days_s=data.split(':',2); cid=int(cid_s); days=int(days_s)
+        except: tg_answer(cb.get('id',''),'درخواست نامعتبر'); return
+        prices={7:tg_price('telegram_renew_7_price',30000),30:tg_price('telegram_renew_30_price',100000),90:tg_price('telegram_renew_90_price',250000)}
+        price=prices.get(days,0)
+        ok,msg,newwallet,charged=tg_charge_and_renew(uid,cid,days,price)
+        if not ok: tg_answer(cb.get('id',''),msg); tg_edit(chat_id,mid,f'❌ {html.escape(msg)}',[[{'text':'💳 شارژ کیف پول','callback_data':'wallet_topup'},{'text':'🔙 سرویس','callback_data':f'service:{cid}'}]]); return
+        restart_xray(); tg_answer(cb.get('id',''),'پرداخت و تمدید با موفقیت انجام شد'); tg_edit(chat_id,mid,f'✅ <b>سرویس تمدید شد</b>\n\nمدت: {days} روز\nهزینه: {tg_money(charged)} تومان\nموجودی جدید: {tg_money(newwallet)} تومان',[[{'text':'📦 مشاهده سرویس','callback_data':f'service:{cid}'}],[{'text':'🏠 منوی اصلی','callback_data':'home'}]]); return
+    if data.startswith('addvolconfirm:'):
+        try: _,cid_s,gb_s=data.split(':',2); cid=int(cid_s); gb=float(gb_s)
+        except: tg_answer(cb.get('id',''),'درخواست نامعتبر'); return
+        prices={5:tg_price('telegram_add_5_price',30000),10:tg_price('telegram_add_10_price',50000),25:tg_price('telegram_add_25_price',100000)}
+        price=prices.get(int(gb),0)
+        ok,msg,newwallet,charged=tg_charge_and_add_volume(uid,cid,gb,price)
+        if not ok: tg_answer(cb.get('id',''),msg); tg_edit(chat_id,mid,f'❌ {html.escape(msg)}',[[{'text':'💳 شارژ کیف پول','callback_data':'wallet_topup'},{'text':'🔙 سرویس','callback_data':f'service:{cid}'}]]); return
+        restart_xray(); tg_answer(cb.get('id',''),'پرداخت و حجم اضافه شد'); tg_edit(chat_id,mid,f'✅ <b>حجم سرویس افزایش یافت</b>\n\nحجم اضافه: {gb:g} GB\nهزینه: {tg_money(charged)} تومان\nموجودی جدید: {tg_money(newwallet)} تومان',[[{'text':'📦 مشاهده سرویس','callback_data':f'service:{cid}'}],[{'text':'🏠 منوی اصلی','callback_data':'home'}]]); return
     if data=='trial':
         if settings().get('telegram_trial_enabled','1')!='1': tg_answer(cb.get('id',''),'تست رایگان غیرفعال است'); return
         try:
@@ -848,7 +960,8 @@ def tg_handle_callback(cb):
         if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
         oid=int(data.split(':',1)[1]); c=db(); r=c.execute('SELECT * FROM telegram_wallet_orders WHERE id=?',(oid,)).fetchone(); c.close()
         if not r: tg_answer(cb.get('id',''),'درخواست پیدا نشد'); return
-        text=f'<b>💰 درخواست شارژ #{oid}</b>\n\nکاربر: <code>{r["telegram_user_id"]}</code>\nمبلغ: <b>{tg_money(r["amount"])} تومان</b>\nوضعیت: {html.escape(r["status"])}\nتاریخ: {fmt_date(r["created_at"])}'
+        receipt_note='\nرسید: ✅ دریافت شده' if r['receipt_file_id'] else ''
+        text=f'<b>💰 درخواست شارژ #{oid}</b>\n\nکاربر: <code>{r["telegram_user_id"]}</code>\nمبلغ: <b>{tg_money(r["amount"])} تومان</b>\nوضعیت: {html.escape(r["status"])}{receipt_note}\nتاریخ: {fmt_date(r["created_at"])}'
         kb=[]
         if r['status']=='pending_admin': kb.append([{'text':'✅ تأیید','callback_data':f'approvewallet:{oid}'},{'text':'❌ رد','callback_data':f'rejectwallet:{oid}'}])
         kb.append([{'text':'💰 پرداخت‌ها','callback_data':'admin_payments'},{'text':'🛠 مدیریت ربات','callback_data':'admin'}]); tg_answer(cb.get('id','')); tg_edit(chat_id,mid,text,kb); return
@@ -876,6 +989,17 @@ def tg_handle_callback(cb):
         if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
         c=db(); users=c.execute('SELECT COUNT(*) n FROM telegram_users').fetchone()['n']; orders=c.execute('SELECT COUNT(*) n FROM telegram_orders').fetchone()['n']; approved=c.execute("SELECT COUNT(*) n FROM telegram_orders WHERE status='approved'").fetchone()['n']; pending=c.execute("SELECT COUNT(*) n FROM telegram_orders WHERE status='pending_admin'").fetchone()['n']; tickets=c.execute("SELECT COUNT(*) n FROM telegram_tickets WHERE status='open'").fetchone()['n']; c.close()
         tg_answer(cb.get('id','')); tg_edit(chat_id,mid,f'<b>📊 آمار ربات</b>\n\nکاربران: {users}\nسفارش‌ها: {orders}\nتأییدشده: {approved}\nدر انتظار تأیید: {pending}\nتیکت باز: {tickets}',[[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]); return
+    if data=='admin_prices':
+        if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
+        st=settings(); text=(f'<b>💰 قیمت‌های تمدید و حجم اضافه</b>\n\n'
+            f'تمدید 7 روز: <b>{tg_money(st.get("telegram_renew_7_price",30000))}</b> تومان\n'
+            f'تمدید 30 روز: <b>{tg_money(st.get("telegram_renew_30_price",100000))}</b> تومان\n'
+            f'تمدید 90 روز: <b>{tg_money(st.get("telegram_renew_90_price",250000))}</b> تومان\n\n'
+            f'+5 GB: <b>{tg_money(st.get("telegram_add_5_price",30000))}</b> تومان\n'
+            f'+10 GB: <b>{tg_money(st.get("telegram_add_10_price",50000))}</b> تومان\n'
+            f'+25 GB: <b>{tg_money(st.get("telegram_add_25_price",100000))}</b> تومان\n\n'
+            'برای تغییر: /setrenewprices 30000 100000 250000\n<code>/setvolprices 30000 50000 100000</code>')
+        tg_answer(cb.get('id','')); tg_edit(chat_id,mid,text,[[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]); return
     if data=='admin_settings':
         if uid!=admin: tg_answer(cb.get('id',''),'فقط ادمین ربات مجاز است'); return
         st=settings(); tg_answer(cb.get('id','')); tg_edit(chat_id,mid,f'<b>⚙️ تنظیمات فروشگاه</b>\n\nخوش‌آمدگویی: {html.escape(st.get("telegram_welcome_text", ""))}\nتست رایگان: {"فعال" if st.get("telegram_trial_enabled","1")=="1" else "غیرفعال"}\nحجم تست: {st.get("telegram_trial_gb","1")} GB\nمدت تست: {st.get("telegram_trial_days","1")} روز\nپاداش دعوت: {st.get("telegram_referral_reward","1")} GB\nکانال اجباری: {html.escape(st.get("telegram_mandatory_channel","") or "ندارد")}\n\nبرای تغییر از دستورهای ربات استفاده کن: /setwelcome /settrial /setref /setchannel',[[{'text':'🛠 مدیریت ربات','callback_data':'admin'}]]); return
@@ -964,7 +1088,30 @@ def tg_handle_callback(cb):
             tg_send(admin,f'⚠️ خطا در ساخت سفارش #{oid}: <code>{html.escape(str(e))}</code>')
 
 def tg_handle_message(msg):
-    chat=msg.get('chat',{}); uid=int(chat.get('id',0)); text=str(msg.get('text','')).strip()
+    chat=msg.get('chat',{}); uid=int(chat.get('id',0)); text=str(msg.get('text','')).strip(); admin=tg_admin_id()
+
+    # Wallet receipt flow: after "پرداخت کردم", the next photo is attached to the order
+    # and forwarded to the configured admin with approve/reject controls.
+    photos=msg.get('photo') or []
+    if photos:
+        c=db(); order=c.execute("SELECT * FROM telegram_wallet_orders WHERE telegram_user_id=? AND status='awaiting_receipt' ORDER BY id DESC LIMIT 1",(uid,)).fetchone(); c.close()
+        if order:
+            photo_id=str(photos[-1].get('file_id') or '')
+            if photo_id:
+                caption=str(msg.get('caption') or '').strip()
+                c=db(); c.execute("UPDATE telegram_wallet_orders SET status='pending_admin', receipt_file_id=?, receipt_caption=? WHERE id=?",(photo_id,caption,int(order['id']))); c.commit(); c.close()
+                tg_send(uid,f"✅ رسید شارژ <b>#{int(order['id'])}</b> دریافت شد.\n\nرسید برای ادمین ارسال شد و بعد از بررسی، موجودی کیف پولت شارژ می‌شود.")
+                if admin:
+                    uname=str(chat.get('username') or chat.get('first_name') or uid)
+                    cap=(f"<b>💳 رسید جدید شارژ کیف پول</b>\n\nدرخواست: <code>#{int(order['id'])}</code>\nکاربر: @{html.escape(uname)}\nTelegram ID: <code>{uid}</code>\nمبلغ: <b>{tg_money(order['amount'])} تومان</b>")
+                    if caption: cap += f"\nتوضیح کاربر: {html.escape(caption)}"
+                    tg_send_photo(admin,photo_id,cap,[[{'text':'✅ تأیید شارژ','callback_data':f'wallet_approve:{int(order["id"])}'},{'text':'❌ رد رسید','callback_data':f'wallet_reject:{int(order["id"])}'}]])
+                return
+        if not text:
+            if admin: tg_send(admin,f'<b>📷 تصویر جدید</b>\nکاربر: <code>{uid}</code>')
+            tg_send(uid,'📷 تصویر دریافت شد. اگر این تصویر رسید پرداخت نیست، پیام خود را به‌صورت متن ارسال کن.')
+            return
+
     if not text:return
 
     if uid==tg_admin_id():
@@ -1027,6 +1174,18 @@ def tg_handle_message(msg):
         tg_user(uid,msg); kb=tg_main_keyboard(uid);
         if uid==tg_admin_id(): kb.append([{'text':'🛠 مدیریت ربات','callback_data':'admin'}])
         tg_send(uid,'<b>'+html.escape(settings().get('telegram_welcome_text','به فروشگاه VPNSTAN خوش آمدید.'))+'</b>',kb)
+    elif uid==tg_admin_id() and text.startswith('/setrenewprices '):
+        try:
+            a=text.split()[1:]; assert len(a)==3; [int(float(x)) for x in a]
+            set_setting('telegram_renew_7_price',a[0]); set_setting('telegram_renew_30_price',a[1]); set_setting('telegram_renew_90_price',a[2])
+            tg_send(uid,'✅ قیمت‌های تمدید ذخیره شد.',[[{'text':'💰 قیمت‌ها','callback_data':'admin_prices'},{'text':'🛠 مدیریت ربات','callback_data':'admin'}]])
+        except Exception: tg_send(uid,'فرمت صحیح: /setrenewprices 30000 100000 250000')
+    elif uid==tg_admin_id() and text.startswith('/setvolprices '):
+        try:
+            a=text.split()[1:]; assert len(a)==3; [int(float(x)) for x in a]
+            set_setting('telegram_add_5_price',a[0]); set_setting('telegram_add_10_price',a[1]); set_setting('telegram_add_25_price',a[2])
+            tg_send(uid,'✅ قیمت‌های حجم اضافه ذخیره شد.',[[{'text':'💰 قیمت‌ها','callback_data':'admin_prices'},{'text':'🛠 مدیریت ربات','callback_data':'admin'}]])
+        except Exception: tg_send(uid,'فرمت صحیح: /setvolprices 30000 50000 100000')
     elif text.startswith('/wallet'):
         tg_send(uid,f'<b>💳 موجودی کیف پول:</b> {tg_money(tg_wallet(uid))}',[[{'text':'🏠 منوی اصلی','callback_data':'home'}]])
     elif text.startswith('/trial'):
@@ -1113,8 +1272,6 @@ class H(BaseHTTPRequestHandler):
     def do_HEAD(self):
         u=urllib.parse.urlparse(self.path); p=u.path
         if p.startswith('/sub/'):
-            with XRAY_LOCK:
-                collect_xray_stats()
             sid=p.split('/')[-1]; s,rows=load_sub(self,sid)
             if not rows:self.send_response(404); self.end_headers(); return
             r=rows[0]; tr=traffic_for(r['id']); total=int(float(r['gb'])*1024**3); exp=r['expiry_at']; self.send_response(200); self.send_header('Subscription-Userinfo',f'upload={tr["upload"]}; download={tr["download"]}; total={total}; expire={exp}'); self.send_header('Profile-Title',base64.b64encode(s.get('panel_title','vpnstan').encode()).decode()); self.send_header('Profile-Update-Interval','1'); self.send_header('Cache-Control','no-store, no-cache, must-revalidate'); self.end_headers(); return
@@ -1180,22 +1337,10 @@ class H(BaseHTTPRequestHandler):
         if p.startswith('/qr/'): return qr_svg(self,p.split('/')[-1])
         if p.startswith('/sub-status/'):
             sid=p.split('/')[-1]
-            # Pull a fresh Xray snapshot for every status request so the public
-            # subscription page never waits for the background collector.
-            # This is intentionally short-lived and read-only.
-            try:
-                with XRAY_LOCK:
-                    collect_xray_stats()
-            except Exception as e:
-                try:
-                    with open('/opt/vpnstan/data/xray-stats.log','a',encoding='utf-8') as f:
-                        f.write('sub-status: '+repr(e)+'\n')
-                except Exception:
-                    pass
             s,rows=load_sub(self,sid)
             if not rows:return send(self,404,{'error':'subscription not found'})
             r=rows[0]; tr=traffic_for(r['id']); total=int(float(r['gb'])*1024**3); used=tr['upload']+tr['download']; remain=max(0,total-used)
-            return send(self,200,{'upload':tr['upload'],'download':tr['download'],'used':used,'remaining':remain,'total':total,'usedText':fmt_bytes(used),'remainingText':fmt_bytes(remain),'uploadText':fmt_bytes(tr['upload']),'downloadText':fmt_bytes(tr['download']),'percent':round((used/total*100) if total else 0,2),'online':bool(tr['last_seen'] and int(time.time())-tr['last_seen']<=20),'lastSeen':tr['last_seen'],'updatedAt':int(time.time())})
+            return send(self,200,{'upload':tr['upload'],'download':tr['download'],'used':used,'remaining':remain,'total':total,'usedText':fmt_bytes(used),'remainingText':fmt_bytes(remain),'uploadText':fmt_bytes(tr['upload']),'downloadText':fmt_bytes(tr['download']),'percent':round((used/total*100) if total else 0,2),'online':bool(tr['last_seen'] and int(time.time())-tr['last_seen']<=20),'lastSeen':tr['last_seen']})
         if p.startswith('/subjson/'):
             sid=p.split('/')[-1]; s,rows=load_sub(self,sid); out=[]; host=host_for(self,s); port=int(s.get('node_port','443'))
             for r in rows:
@@ -1288,6 +1433,24 @@ class H(BaseHTTPRequestHandler):
             if not is_admin(self): return send(self,403,{'success':False,'msg':'فقط ادمین دسترسی دارد'})
             try:r=tg_api('getMe',{},10); return send(self,200,{'success':True,'bot':r})
             except Exception as e:return send(self,400,{'success':False,'msg':str(e)})
+        if p=='/api/backup/export':
+            if not is_admin(self): return send(self,403,{'success':False,'msg':'فقط ادمین دسترسی دارد'})
+            try:
+                raw=export_backup_bytes()
+                self.send_response(200); self.send_header('Content-Type','application/octet-stream'); self.send_header('Content-Disposition','attachment; filename=VPNSTAN-v27-backup.vpnstan'); self.send_header('Content-Length',str(len(raw))); self.send_header('Cache-Control','no-store'); self.end_headers(); self.wfile.write(raw); return
+            except Exception as e:
+                print('BACKUP EXPORT:',e,flush=True); return send(self,500,{'success':False,'msg':'ساخت بکاپ ناموفق بود: '+str(e)})
+        if p=='/api/backup/import':
+            if not is_admin(self): return send(self,403,{'success':False,'msg':'فقط ادمین دسترسی دارد'})
+            try:
+                n=int(self.headers.get('Content-Length','0'))
+                if n<=0 or n>140*1024*1024: raise ValueError('فایل بکاپ نامعتبر یا بیش از حد بزرگ است.')
+                raw=self.rfile.read(n)
+                payload=import_backup_bytes(raw)
+                restart_xray()
+                return send(self,200,{'success':True,'msg':'بکاپ با موفقیت بازیابی شد. برای اعمال کامل اطلاعات، دوباره وارد پنل شوید.','panelVersion':payload.get('panel_version'),'createdAt':payload.get('created_at')})
+            except Exception as e:
+                print('BACKUP IMPORT:',e,flush=True); return send(self,400,{'success':False,'msg':'بازیابی بکاپ ناموفق بود: '+str(e)})
         if p=='/api/settings':
             if not authed(self): return send(self,401,{'success':False,'msg':'نیاز به ورود دارید'})
             if not has_permission(self,'settings_view'): return send(self,403,{'success':False,'msg':'دسترسی تنظیمات برای این پنل فعال نیست'})
