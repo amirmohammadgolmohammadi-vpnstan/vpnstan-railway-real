@@ -57,7 +57,7 @@ html[data-theme="dark"] .ghost,html[data-theme="blue"] .ghost,html[data-theme="p
 html[data-theme="dark"] .permission-box,html[data-theme="blue"] .permission-box,html[data-theme="purple"] .permission-box{color:var(--text)}
 @media(max-width:650px){.permission-box,.mini-grid{grid-template-columns:1fr}.panel-row{align-items:flex-start;flex-direction:column}.header-actions{gap:4px}.nav small{display:inline;margin-right:5px}}
 
-/* VPNSTAN v27 — premium UI refresh */
+/* VPNSTAN v28 — premium UI refresh */
 :root{
  --primary:#2563eb;--primary2:#06b6d4;--accent:#38bdf8;
  --radius:14px;--shadow:0 14px 45px rgba(15,23,42,.08)
@@ -88,7 +88,7 @@ header #title{font-size:19px} .tab{padding:30px 32px 55px}
 html[data-theme="dark"] body,html[data-theme="blue"] body,html[data-theme="purple"] body{background:radial-gradient(circle at 90% 0%,rgba(91,114,255,.13),transparent 30%),var(--bg)}
 @media(max-width:650px){.tab{padding:20px 15px 35px}.cards-list{grid-template-columns:1fr}.sub-summary{grid-template-columns:1fr 1fr}.sub-summary>div:last-child{grid-column:1/-1}}
 
-/* v27 premium language switch */
+/* v28 premium language switch */
 .lang-switch{display:flex;align-items:center;gap:6px;height:38px;padding:0 8px;border:1px solid var(--line);border-radius:10px;background:var(--panel2);color:var(--muted)}
 .lang-switch span{font-size:15px}.lang-switch select{border:0;outline:0;background:transparent;color:var(--text);font:inherit;font-size:11px;cursor:pointer}.lang-switch option{color:#111;background:#fff}.login-lang{margin-top:12px;text-align:center}.login-lang .ghost{width:100%}
 html[dir="ltr"] .app aside{border-right:0;border-left:1px solid var(--line)}
@@ -149,3 +149,72 @@ header{height:78px;background:rgba(7,16,31,.82);backdrop-filter:blur(18px);borde
 .telegram-status{margin:12px 0;padding:12px 14px;border:1px solid #1f4775;background:#071a31;border-radius:10px;color:#8fc0ff}.checkline{display:flex;align-items:center;gap:8px}.checkline input{width:auto}.form textarea{width:100%;box-sizing:border-box;background:#071a31;border:1px solid #1e456f;border-radius:10px;color:#eaf3ff;padding:12px;font:inherit;resize:vertical}.form textarea:focus{outline:none;border-color:#2f7bff}.modal-actions{display:flex;gap:8px;flex-wrap:wrap}
 
 .creator-banner{display:flex;gap:10px;align-items:center;justify-content:center;padding:9px 14px;background:#0b1d33;border-bottom:1px solid #1d3555;font-size:13px}.creator-banner a{color:#5da2ff;text-decoration:none;font-weight:700}.creator-banner a:hover{text-decoration:underline}
+
+
+/* ===== VPNSTAN v28 — supplied 3X-UI 2.9.0 visual reference ===== */
+:root{
+ --v28-bg:#06101d;--v28-panel:#0b192b;--v28-panel2:#0e1e33;
+ --v28-border:#1b3553;--v28-blue:#2475ff;--v28-blue2:#3988ff;
+ --v28-text:#e9f2ff;--v28-muted:#7890ad;--v28-green:#20d4a5;
+}
+body{background:radial-gradient(circle at 65% -20%,#15365e 0,#081524 38%,#050c15 100%);color:var(--v28-text)}
+header{height:68px;background:rgba(5,14,26,.95);border-bottom:1px solid #172d49}
+.app aside{background:linear-gradient(180deg,#071322,#050d17);border-right:1px solid #172d49}
+.brand{border-bottom:1px solid #172d49}
+.nav{border-radius:8px;color:#91a6bf;margin:3px 9px;padding:11px 12px}
+.nav.active{background:linear-gradient(90deg,#1d66df,#2878ff);color:#fff;border-color:#3b88ff;box-shadow:0 7px 20px rgba(36,117,255,.18)}
+.tab{padding:18px 20px 34px}
+.stats{gap:12px;margin-bottom:13px}
+.stats>div,.panel,.server-card{
+ background:linear-gradient(145deg,#0e1e33,#091627);
+ border:1px solid var(--v28-border);border-radius:11px;
+ box-shadow:0 12px 30px rgba(0,0,0,.14)
+}
+.stats>div{min-height:100px;padding:15px 17px}
+.stats b{font-size:22px}.stats span{font-size:10px;color:#91a6bf}
+.xui-v28-operator{
+ background:linear-gradient(145deg,#0d1d32,#091627);border:1px solid var(--v28-border);
+ border-radius:11px;padding:15px;margin:0 0 13px;box-shadow:0 12px 30px rgba(0,0,0,.14)
+}
+.xui-v28-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.xui-v28-head h2{font-size:14px;margin:0}.xui-v28-head small{color:#5f9cff;font-size:8px}
+.xui-v28-select{background:#09172a;border:1px solid #294564;color:#e6effb;border-radius:8px;height:36px;padding:0 10px;min-width:150px}
+.xui-v28-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}
+.xui-v28-carrier{height:66px;border:1px solid #193552;background:#09182b;border-radius:8px;color:#a5b8cf;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;cursor:pointer;font-size:9px}
+.xui-v28-carrier span{font-weight:900;color:#62a4ff;font-size:12px}
+.xui-v28-carrier.active{background:linear-gradient(145deg,#10376f,#0b274d);border-color:#2c83ff;color:#fff;box-shadow:inset 0 0 0 1px #246ad1}
+.xui-v28-strip{display:flex;align-items:center;gap:12px;background:linear-gradient(145deg,#0d1d32,#091627);border:1px solid var(--v28-border);border-radius:11px;padding:11px 13px;margin-bottom:13px}
+.xui-v28-protos{display:flex;gap:6px;flex:1}.xui-v28-proto{height:37px;min-width:78px;border-radius:7px;background:#09182b;border:1px solid #1d3857;color:#a2b5cb;font-size:9px}
+.xui-v28-proto.active{background:#2475ff;border-color:#3988ff;color:#fff}
+.xui-v28-btn{height:37px;border:0;border-radius:7px;background:#2475ff;color:#fff;padding:0 24px;font-weight:700}
+.xui-v28-users{background:linear-gradient(145deg,#0d1d32,#091627);border:1px solid var(--v28-border);border-radius:11px;padding:14px;margin-top:13px}
+.xui-v28-users-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.xui-v28-users h2{font-size:14px;margin:0}.xui-v28-search{height:35px;width:230px;background:#081628;border:1px solid #203c5d;border-radius:7px;color:#fff;padding:0 10px}
+.xui-v28-table{width:100%;border-collapse:collapse;min-width:780px}.xui-v28-table th{background:#0a1b31;color:#7189a5;font-size:8px;padding:10px;text-align:right}.xui-v28-table td{border-top:1px solid #142c48;color:#b7c9dd;font-size:9px;padding:10px}.xui-v28-table-wrap{overflow:auto;border:1px solid #172f4d;border-radius:8px}
+.v28-status{background:#0b3a34;color:#21d3a6;border-radius:5px;padding:4px 8px}.v28-status.off{background:#47212b;color:#ff7588}
+@media(max-width:1000px){.xui-v28-grid{grid-template-columns:repeat(4,1fr)}}
+@media(max-width:650px){.xui-v28-grid{grid-template-columns:repeat(3,1fr)}.xui-v28-head,.xui-v28-strip,.xui-v28-users-head{align-items:stretch;flex-direction:column}.xui-v28-search{width:100%}}
+
+
+.vpnstan-channel-id{
+  display:flex;align-items:center;justify-content:center;gap:9px;
+  margin:14px auto 4px;padding:9px 15px;width:max-content;max-width:90%;
+  background:linear-gradient(145deg,#0c1d32,#081526);
+  border:1px solid #1b3a5c;border-radius:9px;color:#8ea5bf;
+  font-size:10px;box-shadow:0 8px 22px rgba(0,0,0,.15)
+}
+.vpnstan-channel-id strong{color:#e8f2ff;font-size:12px;direction:ltr}
+.vpnstan-channel-id span:last-child{color:#4c94ff;font-size:9px}
+
+
+/* ===== v28 HOME — compact 3X-UI 2.9.0 inspired overview ===== */
+.v28-home-overview{margin:0 0 16px}
+.v28-gauges{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px}
+.v28-gauge-card{height:112px;background:#11192d;border:1px solid #202b43;border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#93a0b9;position:relative}
+.v28-gauge-card span{font-size:9px;margin-top:-3px}.v28-gauge-card small{font-size:7px;color:#6d7c96;margin-top:3px}
+.v28-gauge{width:108px;height:64px;position:relative}.v28-gauge svg{width:100%;height:100%;overflow:visible}.v28-gauge path{fill:none;stroke-width:7;stroke-linecap:round}.v28-gauge .track{stroke:#26304a}.v28-gauge .value{stroke:#38d2a2;stroke-dasharray:151;stroke-dashoffset:calc(151 - (151 * var(--pct) / 100));filter:drop-shadow(0 0 4px rgba(56,210,162,.18))}.v28-gauge b{position:absolute;left:0;right:0;bottom:0;text-align:center;color:#cbd5e5;font-size:9px;font-weight:500}
+.v28-info-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:8px}.v28-info{min-height:39px;background:#11192d;border:1px solid #202b43;border-radius:10px;display:flex;align-items:center;gap:6px;padding:7px 11px;color:#8e9ab3;font-size:8px;flex-wrap:wrap}.v28-info b{color:#aab5c9;font-size:8px;margin-left:4px}.v28-pill{background:#202941;border:1px solid #2a3550;color:#9ca8bd;border-radius:8px;padding:4px 7px;font-size:7px}.v28-pill.green{background:#10382f;border-color:#1b5949;color:#51d8ad}.v28-pill.pink{background:#3c2035;border-color:#56304b;color:#d17ab0}
+.v28-summary{display:grid;grid-template-columns:2fr 1.3fr 1.2fr 1fr;gap:8px;background:#11192d;border:1px solid #202b43;border-radius:11px;padding:13px;margin:8px 0}.v28-summary div{display:flex;gap:6px;align-items:center;color:#8290aa;font-size:8px}.v28-summary b{color:#54d7ac;font-weight:600}
+.v28-inbounds{background:#11192d!important;border:1px solid #202b43!important;border-radius:12px!important;padding:13px!important}.v28-inbounds-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.v28-inbounds-head h2{font-size:13px;margin:0}.v28-inbounds-head small{font-size:7px;color:#687791}.v28-green-btn,.v28-action-btn{height:30px;border-radius:8px;border:1px solid #2a6659;padding:0 12px;font-size:8px;cursor:pointer}.v28-green-btn{background:#2d8f79;color:#e7fff9}.v28-action-btn{background:#17223a;color:#9ba8bd;border-color:#293651;margin-right:5px}.v28-inbound-tools{height:36px;display:flex;align-items:center;gap:6px;background:#0f172a;border:1px solid #1d2840;border-radius:9px;padding:0 8px;margin-bottom:8px}.v28-dot{color:#c7d0df;font-size:8px}.v28-inbound-tools input{background:transparent;border:0;outline:0;color:#d8e1ee;width:210px;font-size:8px}.v28-table-wrap{overflow:auto;border:1px solid #202b43;border-radius:9px}.v28-inbound-table{width:100%;min-width:760px;border-collapse:collapse}.v28-inbound-table th{background:#0c1426;color:#76849e;text-align:right;font-size:7px;padding:10px}.v28-inbound-table td{border-top:1px solid #1d2941;color:#9ca9bf;font-size:8px;padding:10px}.v28-inbound-table td:first-child{color:#cbd5e4}.v28-inbound-table tr:hover{background:#141e34}
+@media(max-width:800px){.v28-gauges{grid-template-columns:repeat(2,1fr)}.v28-info-grid{grid-template-columns:1fr}.v28-summary{grid-template-columns:1fr 1fr}}
+@media(max-width:520px){.v28-gauges{grid-template-columns:1fr 1fr}.v28-summary{grid-template-columns:1fr}.v28-gauge-card{height:105px}}

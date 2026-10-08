@@ -1,8 +1,8 @@
 
-/* VPNSTAN v27 multilingual UI */
+/* VPNSTAN v28 multilingual UI */
 const I18N={
- fa:{dir:'rtl',title:'نمای کلی',sub:'مدیریت سرویس vpnstan · نسخه v27',badgeMaster:'پنل مادر',logout:'خروج',overview:'نمای کلی',clients:'کلاینت‌ها',configs:'کانفیگ‌ها',subscriptions:'اشتراک‌ها',dns:'DNS',settings:'تنظیمات',telegram:'ربات تلگرام',account:'حساب من',admin:'مدیریت پنل‌ها',online:'سرویس آنلاین',login:'ورود به پنل',loginDesc:'مدیریت مستقل کانفیگ‌ها، اشتراک‌ها و پنل‌های فرزند',username:'نام کاربری',password:'رمز عبور'},
- en:{dir:'ltr',title:'Overview',sub:'vpnstan service management · v27',badgeMaster:'Master Panel',logout:'Logout',overview:'Overview',clients:'Clients',configs:'Configs',subscriptions:'Subscriptions',dns:'DNS',settings:'Settings',account:'My Account',admin:'Panel Management',online:'Service Online',login:'Sign in',loginDesc:'Independent management of configs, subscriptions and child panels',username:'Username',password:'Password'}
+ fa:{dir:'rtl',title:'نمای کلی',sub:'مدیریت سرویس vpnstan · نسخه v28',badgeMaster:'پنل مادر',logout:'خروج',overview:'نمای کلی',clients:'کلاینت‌ها',configs:'کانفیگ‌ها',subscriptions:'اشتراک‌ها',dns:'DNS',settings:'تنظیمات',telegram:'ربات تلگرام',account:'حساب من',admin:'مدیریت پنل‌ها',online:'سرویس آنلاین',login:'ورود به پنل',loginDesc:'مدیریت مستقل کانفیگ‌ها، اشتراک‌ها و پنل‌های فرزند',username:'نام کاربری',password:'رمز عبور'},
+ en:{dir:'ltr',title:'Overview',sub:'vpnstan service management · v28',badgeMaster:'Master Panel',logout:'Logout',overview:'Overview',clients:'Clients',configs:'Configs',subscriptions:'Subscriptions',dns:'DNS',settings:'Settings',account:'My Account',admin:'Panel Management',online:'Service Online',login:'Sign in',loginDesc:'Independent management of configs, subscriptions and child panels',username:'Username',password:'Password'}
 };
 
 const STATIC_I18N={
@@ -52,7 +52,7 @@ applyTheme(localStorage.getItem('vpnstan_theme')||'dark');
 async function req(u,o={}){let r=await fetch(u,{credentials:'include',...o});let d;try{d=await r.json()}catch{d={msg:'خطای پاسخ سرور'}}if(!r.ok)throw Error(d.msg||'خطا');return d}
 const titles={dashboard:'نمای کلی',clients:'کلاینت‌ها',configs:'کانفیگ‌ها',subscriptions:'اشتراک‌ها',dns:'DNS',settings:'تنظیمات',telegram:'ربات تلگرام',account:'حساب من',admin:'مدیریت پنل‌ها'};
 function can(p){return !me||me.role==='admin'||me.panel_id===0||p==='overview'||p==='account'||me.permissions?.[p]}
-function applyPermissions(){document.querySelectorAll('.nav[data-perm]').forEach(n=>{const p=n.dataset.perm;let hide=false;if(p==='admin')hide=!(me?.role==='admin');else if(p==='telegram')hide=!(me?.role==='admin');else hide=!can(p);n.classList.toggle('hidden',hide)});if(me?.role==='admin'){document.getElementById('adminNav').classList.remove('hidden');$('telegramNav')?.classList.remove('hidden');$('masterOverview').classList.remove('hidden')}else{$('masterOverview').classList.add('hidden')}$('currentPanelBadge').textContent='v27';if($('headerUser'))$('headerUser').textContent=me?.username||'admin';if($('dropUsername'))$('dropUsername').textContent=me?.username||'admin';if($('dropRole'))$('dropRole').textContent=me?.role==='admin'?'مدیر / ادمین':'کاربر پنل'}
+function applyPermissions(){document.querySelectorAll('.nav[data-perm]').forEach(n=>{const p=n.dataset.perm;let hide=false;if(p==='admin')hide=!(me?.role==='admin');else if(p==='telegram')hide=!(me?.role==='admin');else hide=!can(p);n.classList.toggle('hidden',hide)});if(me?.role==='admin'){document.getElementById('adminNav').classList.remove('hidden');$('telegramNav')?.classList.remove('hidden');$('masterOverview').classList.remove('hidden')}else{$('masterOverview').classList.add('hidden')}$('currentPanelBadge').textContent='v28';if($('headerUser'))$('headerUser').textContent=me?.username||'admin';if($('dropUsername'))$('dropUsername').textContent=me?.username||'admin';if($('dropRole'))$('dropRole').textContent=me?.role==='admin'?'مدیر / ادمین':'کاربر پنل'}
 function openTab(id){const section=$(id);if(!section)return;const nav=document.querySelector(`.nav[data-tab="${id}"]`);if(nav&&nav.classList.contains('hidden'))return;document.querySelectorAll('.tab').forEach(x=>x.classList.add('hidden'));section.classList.remove('hidden');document.querySelectorAll('.nav').forEach(x=>x.classList.toggle('active',x.dataset.tab===id));$('title').textContent=titles[id]||id;if(id==='clients')renderClients();if(id==='configs')renderConfigs();if(id==='subscriptions')renderSubs();if(id==='dns')renderDns();if(id==='settings')loadSettings();if(id==='telegram')loadTelegram();if(id==='account')loadMe();if(id==='admin')loadPanels()}
 document.querySelectorAll('.nav').forEach(x=>x.addEventListener('click',()=>openTab(x.dataset.tab)));
 window.addEventListener('error',e=>{const el=$('loginMsg')||$('createMsg');if(el&&!e.message.includes('Script error'))el.textContent='خطای رابط پنل: '+e.message});
@@ -95,7 +95,7 @@ function renderSubs(){
        <div class="pro-sub-progress"><div><span>مصرف اشتراک</span><b>${pct}%</b></div><div class="pro-progress-track"><i style="width:${pct}%"></i></div></div>
        <div class="pro-sub-link-label"><span>لینک Subscription</span><small>برای استفاده در کلاینت کپی کنید</small></div>
        <div class="pro-copybox"><span class="link-dot"></span><code>${esc(sub)}</code><button onclick="copy('${enc(sub)}')">کپی لینک</button></div>
-       <div class="pro-sub-actions"><button class="pro-action primary-action" onclick="copy('${enc(sub)}')">⧉ کپی Subscription</button><button class="pro-action" onclick="openTab('configs')">▣ مدیریت کانفیگ‌ها</button><button class="pro-action" onclick="refresh()">↻ بروزرسانی</button></div>
+       <div class="pro-sub-actions"><button class="pro-action primary-action" onclick="copy('${enc(sub)}')">⧉ کپی Subscription</button><button class="pro-action" onclick="window.open('${enc(sub)}?html=1','_blank')">▣ نمایش ساب</button><button class="pro-action" onclick="openTab('configs')">▣ مدیریت کانفیگ‌ها</button><button class="pro-action" onclick="refresh()">↻ بروزرسانی</button></div>
        <div class="pro-sub-configs"><div class="pro-config-head"><b>کانفیگ‌های این اشتراک</b><span>${arr.length} مورد</span></div>${arr.map((c,i)=>{const cp=Number(c.totalBytes)?Math.min(100,Math.round(Number(c.usedBytes||c.used||0)/Number(c.totalBytes)*100)):0;return `<div class="pro-config-row"><span class="pro-config-num">${i+1}</span><div class="pro-config-main"><b>${esc(c.name)}</b><small>${esc(String(c.protocol||'').toUpperCase())} · ${esc(c.transport||'WS')} · ${esc(c.usedText||'0 B')} / ${esc(c.totalText||fmtUsed(c.totalBytes))}</small></div><div class="pro-mini-progress"><i style="width:${cp}%"></i></div><span class="pro-config-pct">${cp}%</span><span class="pro-config-state ${c.enabled&&!expired(c)?'on':'off'}"></span></div>`}).join('')}</div>
      </div>
    </article>`;
@@ -136,14 +136,14 @@ document.addEventListener('change',e=>{if(e.target?.id==='setTheme')applyTheme(e
 document.addEventListener('click',e=>{if(!e.target.closest('.account-menu-wrap'))toggleUserMenu(false)});
 
 
-// ===== Full VPNSTAN v27 backup / restore =====
+// ===== Full VPNSTAN v28 backup / restore =====
 async function downloadFullBackup(){
   const msg=$('backupMsg'); if(msg) msg.textContent='در حال ساخت بکاپ کامل...';
   try{
     const r=await fetch('/api/backup/export',{credentials:'same-origin',cache:'no-store'});
     if(!r.ok){let d={};try{d=await r.json()}catch(e){};throw new Error(d.msg||'ساخت بکاپ ناموفق بود')}
     const blob=await r.blob();
-    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='VPNSTAN-v27-backup.vpnstan'; document.body.appendChild(a); a.click(); a.remove();
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='VPNSTAN-v28-backup.vpnstan'; document.body.appendChild(a); a.click(); a.remove();
     setTimeout(()=>URL.revokeObjectURL(a.href),1000);
     if(msg) msg.textContent='✅ بکاپ کامل دانلود شد.';
   }catch(e){if(msg) msg.textContent='❌ '+e.message}
@@ -162,3 +162,48 @@ async function restoreFullBackup(input){
   }catch(e){if(msg) msg.textContent='❌ '+e.message}
   finally{input.value=''}
 }
+
+
+// v28 dashboard controls
+(function(){
+  function activate(op){
+    document.querySelectorAll('.xui-v28-carrier').forEach(b=>b.classList.toggle('active',b.dataset.op===op));
+    const s=document.getElementById('v28CarrierSelect'); if(s)s.value=op;
+  }
+  document.addEventListener('click',function(e){
+    const b=e.target.closest('.xui-v28-carrier');
+    if(b) activate(b.dataset.op);
+    const p=e.target.closest('.xui-v28-proto');
+    if(p){
+      document.querySelectorAll('.xui-v28-proto').forEach(x=>x.classList.remove('active'));
+      p.classList.add('active');
+    }
+  });
+  const s=document.getElementById('v28CarrierSelect');
+  if(s)s.addEventListener('change',()=>activate(s.value));
+})();
+
+
+/* v28 home overview helpers */
+function v28FmtBytes(n){
+  n=Number(n||0); if(!n)return '0 B';
+  const u=['B','KB','MB','GB','TB']; let i=0;
+  while(n>=1024&&i<u.length-1){n/=1024;i++}
+  return (n<10?n.toFixed(2):n.toFixed(1))+' '+u[i];
+}
+function v28RenderInbounds(){
+  const body=document.getElementById('v28InboundBody'); if(!body)return;
+  const arr=(typeof clients!=='undefined' && Array.isArray(clients))?clients:[];
+  body.innerHTML=arr.slice(0,25).map((c,i)=>{
+    const proto=String(c.protocol||c.type||'VLESS').toLowerCase();
+    const name=String(c.name||c.remark||('client-'+(i+1)));
+    const used=Number(c.usedBytes||c.used||0), total=Number(c.totalBytes||c.total||0);
+    return `<tr><td>${c.id??(i+1)}</td><td>⋮</td><td><span class="v28-pill green">●</span></td><td>${name}</td><td>${c.port||'—'}</td><td>${proto}</td><td>1</td><td>${v28FmtBytes(used)} / ${v28FmtBytes(total)}</td><td>${c.days||'∞'}</td></tr>`;
+  }).join('') || '<tr><td colspan="9" style="text-align:center;padding:22px">No inbounds</td></tr>';
+}
+function v28FilterInbounds(q){
+  const rows=document.querySelectorAll('#v28InboundBody tr'); q=String(q||'').toLowerCase();
+  rows.forEach(r=>r.style.display=r.textContent.toLowerCase().includes(q)?'':'none');
+}
+setTimeout(v28RenderInbounds,500);
+setInterval(v28RenderInbounds,5000);
