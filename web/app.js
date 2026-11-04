@@ -171,7 +171,35 @@ const enc=s=>btoa(unescape(encodeURIComponent(s))),dec=s=>decodeURIComponent(esc
 async function changeAccount(){try{let d=await req('/api/account/change',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('accUser').value,oldPassword:$('accOld').value,newPassword:$('accNew').value})});$('accMsg').textContent=d.msg||'ذخیره شد؛ دوباره وارد شوید';setTimeout(()=>location.reload(),1200)}catch(e){$('accMsg').textContent=e.message}}
 function permsFromForm(){return{clients_view:$('pView').checked,clients_create:$('pCreate').checked,clients_edit:$('pEdit').checked,clients_delete:$('pDelete').checked,configs_view:$('pSub').checked,dns_view:$('pDns').checked,settings_view:$('pSettings').checked}}
 async function createPanel(){try{let d=await req('/api/admin/panels/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('panelName').value,username:$('panelUser').value,password:$('panelPass').value,allowed_ip:$('panelAllowedIp').value,permissions:permsFromForm()})});$('panelMsg').textContent=`پنل «${d.panel.name}» ساخته شد. IP تشخیص‌داده‌شده: ${d.panel.detected_ip}`;$('panelName').value='';$('panelUser').value='';$('panelPass').value='';loadPanels()}catch(e){$('panelMsg').textContent=e.message}}
-async function loadPanels(){if(!me||me.role!=='admin')return;try{let d=await req('/api/admin/panels');$('detectedIp').textContent=d.detected_ip||'نامشخص';$('panelsList').innerHTML=d.panels.length?d.panels.map(p=>`<div class="panel-row"><div><b>${esc(p.name)}</b><small>شناسه ${p.id} · IP ساخت: ${esc(p.detected_ip||'—')} ${p.allowed_ip?`· IP مجاز: ${esc(p.allowed_ip)}`:''}</small></div><div class="row-actions"><span class="tag">${p.enabled?'فعال':'غیرفعال'}</span><button class="mini" onclick="togglePanel(${p.id})">${p.enabled?'غیرفعال':'فعال'}</button><button class="danger mini" onclick="deletePanel(${p.id})">حذف</button></div></div>`).join(''):'<div class="empty">هنوز پنل فرزندی ساخته نشده است.</div>';$('overviewPanels').innerHTML=d.panels.slice(0,4).map(p=>`<div class="mini-card"><b>${esc(p.name)}</b><small>${p.enabled?'فعال':'غیرفعال'} · IP ${esc(p.detected_ip||'—')}</small></div>`).join('')||'<div class="empty">پنل فرزندی وجود ندارد.</div>'}catch(e){$('panelMsg').textContent=e.message}}
+async function loadPanels(){if(!me||me.role!=='admin')return;try{let d=await req('/api/admin/panels');managedPanels=d.panels||[];$('detectedIp').textContent=d.detected_ip||'نامشخص';$('panelsList').innerHTML=d.panels.length?d.panels.map(p=>`<div class="panel-row"><div><b>${esc(p.name)}</b><small>شناسه ${p.id} · IP ساخت: ${esc(p.detected_ip||'—')} ${p.allowed_ip?`· IP مجاز: ${esc(p.allowed_ip)}`:''}</small></div><div class="row-actions"><span class="tag">${p.enabled?'فعال':'غیرفعال'}</span><button class="mini" onclick="editPanel(${p.id})">ویرایش مشخصات</button><button class="mini" onclick="togglePanel(${p.id})">${p.enabled?'غیرفعال':'فعال'}</button><button class="danger mini" onclick="deletePanel(${p.id})">حذف</button></div></div>`).join(''):'<div class="empty">هنوز پنل فرزندی ساخته نشده است.</div>';$('overviewPanels').innerHTML=d.panels.slice(0,4).map(p=>`<div class="mini-card"><b>${esc(p.name)}</b><small>${p.enabled?'فعال':'غیرفعال'} · IP ${esc(p.detected_ip||'—')}</small></div>`).join('')||'<div class="empty">پنل فرزندی وجود ندارد.</div>'}catch(e){$('panelMsg').textContent=e.message}}
+let managedPanels=[];
+function panelPerms(p){return p?.permissions||{}}
+function editPanel(id){
+ const p=managedPanels.find(x=>Number(x.id)===Number(id)); if(!p)return;
+ $('panelEditId').value=p.id; $('panelEditName').value=p.name||'';
+ $('panelEditUser').value=p.username||''; $('panelEditPassword').value='';
+ $('panelEditIp').value=p.allowed_ip||'';
+ const perms=panelPerms(p);
+ $('peView').checked=!!perms.clients_view; $('peCreate').checked=!!perms.clients_create;
+ $('peEdit').checked=!!perms.clients_edit; $('peDelete').checked=!!perms.clients_delete;
+ $('peSub').checked=!!perms.configs_view; $('peDns').checked=!!perms.dns_view;
+ $('peSettings').checked=!!perms.settings_view;
+ $('panelEditMsg').textContent='';
+ $('panelEditModal').classList.remove('hidden');
+}
+function closePanelEdit(){ $('panelEditModal').classList.add('hidden'); }
+async function savePanelEdit(){
+ try{
+  const id=$('panelEditId').value;
+  const permissions={clients_view:$('peView').checked,clients_create:$('peCreate').checked,
+   clients_edit:$('peEdit').checked,clients_delete:$('peDelete').checked,
+   configs_view:$('peSub').checked,dns_view:$('peDns').checked,settings_view:$('peSettings').checked};
+  const d=await req('/api/admin/panels/'+id+'/edit',{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({name:$('panelEditName').value,username:$('panelEditUser').value,
+    password:$('panelEditPassword').value,allowed_ip:$('panelEditIp').value,permissions})});
+  $('panelEditMsg').textContent=d.msg||'ذخیره شد'; closePanelEdit(); await loadPanels();
+ }catch(e){$('panelEditMsg').textContent=e.message}
+}
 async function togglePanel(id){try{await req('/api/admin/panels/'+id+'/toggle',{method:'POST'});loadPanels()}catch(e){alert(e.message)}}
 async function deletePanel(id){if(!confirm('این پنل فرزند و اکانت ورودش حذف شود؟'))return;try{await req('/api/admin/panels/'+id+'/delete',{method:'POST'});loadPanels()}catch(e){alert(e.message)}}
 async function loadUsers(){try{let d=await req('/api/admin/users');$('usersList').innerHTML=d.users.map(u=>`<div class="client-row"><div><b>${esc(u.username)}</b><small>${u.role==='admin'?'ادمین':(u.panel_id?'کاربر پنل #'+u.panel_id:'کاربر مادر')} · ${u.enabled?'فعال':'غیرفعال'}</small></div><div class="row-actions"><button class="mini" onclick="toggleUser(${u.id})">${u.enabled?'غیرفعال کردن':'فعال کردن'}</button><button class="danger mini" onclick="deleteUser(${u.id})">حذف</button></div></div>`).join('')}catch{}}

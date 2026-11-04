@@ -273,11 +273,19 @@ def collect_xray_stats():
     c=db(); now=int(time.time())
     rows=c.execute('SELECT id,uuid FROM clients').fetchall()
     for r in rows:
-        st=stats.get('vpnstan-'+r['uuid']) or stats.get(r['uuid'])
+        # Xray reports cumulative counters under the client email. Match
+        # case-insensitively as well, since some Xray builds normalize email.
+        st=(stats.get('vpnstan-'+r['uuid']) or stats.get(r['uuid']) or
+            stats.get(('vpnstan-'+r['uuid']).lower()) or stats.get(r['uuid'].lower()))
         if not st: continue
         old=c.execute('SELECT upload,download,last_seen,raw_upload,raw_download FROM traffic WHERE client_id=?',(r['id'],)).fetchone()
         if not old:
-            total_u=0; total_d=0; delta_u=0; delta_d=0; last=0
+            # IMPORTANT: the first stats poll may happen after a user has
+            # already transferred data. Seed both the visible totals and raw
+            # baselines from Xray instead of silently discarding that usage.
+            total_u=max(0,int(st['upload'])); total_d=max(0,int(st['download']))
+            delta_u=total_u; delta_d=total_d
+            last=now if delta_u+delta_d>0 else 0
         else:
             raw_u=int(old['raw_upload']); raw_d=int(old['raw_download'])
             delta_u=(st['upload']-raw_u) if st['upload']>=raw_u else st['upload']
@@ -433,6 +441,11 @@ def load_sub(h,sid):
 def sub_page(h,sid):
     # Xray stats are collected by the /sub request handler before this page is rendered.
     # Do not acquire XRAY_LOCK again here: the caller may already hold it.
+    try:
+        with XRAY_LOCK:
+            collect_xray_stats()
+    except Exception as e:
+        print('SUB PAGE STATS REFRESH ERROR:',e,flush=True)
     s,rows=load_sub(h,sid)
     if not rows:
         h.send_response(404); h.send_header('Content-Type','text/html; charset=utf-8'); h.end_headers(); h.wfile.write('<h2>اشتراک پیدا نشد یا منقضی شده است.</h2>'.encode()); return
@@ -993,6 +1006,13 @@ class H(BaseHTTPRequestHandler):
         if p.startswith('/qr/'): return qr_svg(self,p.split('/')[-1])
         if p.startswith('/sub-status/'):
             sid=p.split('/')[-1]
+            # Take a fresh Xray snapshot before returning usage to the
+            # subscription page; the page polls this endpoint every second.
+            try:
+                with XRAY_LOCK:
+                    collect_xray_stats()
+            except Exception as e:
+                print('SUB STATUS STATS REFRESH ERROR:',e,flush=True)
             s,rows=load_sub(self,sid)
             if not rows:return send(self,404,{'error':'subscription not found'})
             r=rows[0]; tr=traffic_for(r['id']); total=int(float(r['gb'])*1024**3); used=tr['upload']+tr['download']; remain=max(0,total-used)

@@ -62,3 +62,12 @@ Xray StatsService برای upload/download فعال است. مصرف هر کار
 - Each child panel gets its own login, permissions, detected source IP, optional allowed-IP restriction, and isolated client list.
 - Child panels do not see master-panel clients; their clients are stored with a panel scope.
 - Xray remains shared by the parent installation, so all active client configs can be served by the same node.
+
+
+## اصلاحات جداسازی پنل‌های نمایندگی و ویرایش مدیر (v28.4)
+- کاربران و ترافیک پنل فرزند فقط با `panel_id` همان پنل نمایش داده می‌شوند.
+- عملیات تمدید، افزایش حجم، فعال/غیرفعال‌سازی و حذف نیز فقط روی کلاینت‌های متعلق به همان پنل مجاز است؛ ساخت/ویرایش/حذف با سطح دسترسی پنل کنترل می‌شود.
+- تشخیص دسترسی ادمین مادر به `role=admin` و `panel_id=0` محدود شده تا ادمین/کاربر پنل فرزند به داده‌های پنل‌های دیگر دسترسی نداشته باشد.
+- در مدیریت پنل‌ها، گزینه «ویرایش مشخصات» برای تغییر نام پنل، نام کاربری مدیر، رمز جدید (اختیاری)، IP مجاز و سطح دسترسی‌ها اضافه شده است.
+- برای حفظ رمز فعلی مدیر پنل، فیلد رمز جدید را هنگام ویرایش خالی بگذارید.
+- فایل‌های اجرایی Railway داخل پوشه `web/` به‌روزرسانی شده‌اند؛ Dockerfile همین پوشه را در سرویس کپی می‌کند.

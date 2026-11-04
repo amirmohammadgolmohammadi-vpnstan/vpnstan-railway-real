@@ -67,14 +67,14 @@ def permission_map(row):
 def has_permission(h, name):
     u=current_user(h)
     if not u: return False
-    if u['role']=='admin' or int(u['panel_id'] or 0)==0: return True
+    if (u['role']=='admin' and int(u['panel_id'] or 0)==0) or int(u['panel_id'] or 0)==0: return True
     c=db(); r=c.execute('SELECT permissions_json FROM child_panels WHERE id=?',(u['panel_id'],)).fetchone(); c.close()
     perms=permission_map(r) if r else {}
     return bool(perms.get(name, False))
 
 def panel_scope(h):
     u=current_user(h)
-    return None if u and (u['role']=='admin' or int(u['panel_id'] or 0)==0) else (int(u['panel_id']) if u else None)
+    return None if u and int(u['panel_id'] or 0)==0 else (int(u['panel_id']) if u else None)
 
 XRAY_LOCK=threading.RLock()
 
@@ -258,7 +258,7 @@ def current_user(h):
     return None
 
 def is_admin(h):
-    u=current_user(h); return bool(u and u['role']=='admin')
+    u=current_user(h); return bool(u and u['role']=='admin' and int(u['panel_id'] or 0)==0)
 
 def auth_error(h):
     return send(h,401,{'success':False,'msg':'نیاز به ورود دارید'})
@@ -313,11 +313,19 @@ def collect_xray_stats():
     c=db(); now=int(time.time())
     rows=c.execute('SELECT id,uuid FROM clients').fetchall()
     for r in rows:
-        st=stats.get('vpnstan-'+r['uuid']) or stats.get(r['uuid'])
+        # Xray reports cumulative counters under the client email. Match
+        # case-insensitively as well, since some Xray builds normalize email.
+        st=(stats.get('vpnstan-'+r['uuid']) or stats.get(r['uuid']) or
+            stats.get(('vpnstan-'+r['uuid']).lower()) or stats.get(r['uuid'].lower()))
         if not st: continue
         old=c.execute('SELECT upload,download,last_seen,raw_upload,raw_download FROM traffic WHERE client_id=?',(r['id'],)).fetchone()
         if not old:
-            total_u=0; total_d=0; delta_u=0; delta_d=0; last=0
+            # IMPORTANT: the first stats poll may happen after a user has
+            # already transferred data. Seed both the visible totals and raw
+            # baselines from Xray instead of silently discarding that usage.
+            total_u=max(0,int(st['upload'])); total_d=max(0,int(st['download']))
+            delta_u=total_u; delta_d=total_d
+            last=now if delta_u+delta_d>0 else 0
         else:
             raw_u=int(old['raw_upload']); raw_d=int(old['raw_download'])
             delta_u=(st['upload']-raw_u) if st['upload']>=raw_u else st['upload']
@@ -545,6 +553,11 @@ def sub_page(h,sid):
     # Public subscription/config page. This is a UI-only redesign of the existing
     # subscription page; all existing subscription generation, traffic and config
     # endpoints remain unchanged.
+    try:
+        with XRAY_LOCK:
+            collect_xray_stats()
+    except Exception as e:
+        print('SUB PAGE STATS REFRESH ERROR:',e,flush=True)
     s,rows=load_sub(h,sid)
     if not rows:
         h.send_response(404); h.send_header('Content-Type','text/html; charset=utf-8'); h.end_headers(); h.wfile.write('<h2>اشتراک پیدا نشد یا منقضی شده است.</h2>'.encode()); return
@@ -1430,6 +1443,13 @@ class H(BaseHTTPRequestHandler):
         if p.startswith('/qr/'): return qr_svg(self,p.split('/')[-1])
         if p.startswith('/sub-status/'):
             sid=p.split('/')[-1]
+            # Take a fresh Xray snapshot before returning usage to the
+            # subscription page; the page polls this endpoint every second.
+            try:
+                with XRAY_LOCK:
+                    collect_xray_stats()
+            except Exception as e:
+                print('SUB STATUS STATS REFRESH ERROR:',e,flush=True)
             s,rows=load_sub(self,sid)
             if not rows:return send(self,404,{'error':'subscription not found'})
             r=rows[0]; tr=traffic_for(r['id']); total=int(float(r['gb'])*1024**3); used=tr['upload']+tr['download']; remain=max(0,total-used)
@@ -1469,7 +1489,7 @@ class H(BaseHTTPRequestHandler):
             u=current_user(self)
             if not u: return send(self,200,{'authenticated':False,'user':None})
             perms={'clients_view':True,'clients_create':True,'clients_edit':True,'clients_delete':True,'configs_view':True,'dns_view':True,'settings_view':True}
-            if u['role']!='admin' and int(u['panel_id'] or 0):
+            if int(u['panel_id'] or 0):
                 c=db(); r=c.execute('SELECT permissions_json FROM child_panels WHERE id=?',(u['panel_id'],)).fetchone(); c.close(); perms=permission_map(r) if r else {}
             return send(self,200,{'authenticated':True,'user':{'id':u['id'],'username':u['username'],'role':u['role'],'panel_id':int(u['panel_id'] or 0),'permissions':perms}})
         if p=='/api/admin/users':
@@ -1478,7 +1498,7 @@ class H(BaseHTTPRequestHandler):
             return send(self,200,{'success':True,'users':[dict(r) for r in rows]})
         if p=='/api/admin/panels':
             if not is_admin(self): return send(self,403,{'success':False,'msg':'فقط ادمین دسترسی دارد'})
-            c=db(); rows=c.execute('SELECT id,name,panel_key,enabled,detected_ip,allowed_ip,permissions_json,created_at FROM child_panels ORDER BY id DESC').fetchall(); c.close()
+            c=db(); rows=c.execute('SELECT cp.id,cp.name,cp.panel_key,cp.enabled,cp.detected_ip,cp.allowed_ip,cp.permissions_json,cp.created_at,(SELECT username FROM panel_users pu WHERE pu.panel_id=cp.id ORDER BY pu.id LIMIT 1) AS username FROM child_panels cp ORDER BY cp.id DESC').fetchall(); c.close()
             out=[]
             for r in rows:
                 d=dict(r); d['permissions']=permission_map(r); d.pop('permissions_json',None); out.append(d)
@@ -1658,7 +1678,9 @@ class H(BaseHTTPRequestHandler):
             set_setting('bot_api_key',key)
             return send(self,200,{'success':True,'apiKey':key})
         if p=='/api/clients/create':
-            if not (bot_api_authed(self) or authed(self)): return send(self,401,{'success':False,'msg':'نیاز به ورود یا API key دارید'})
+            via_bot=bot_api_authed(self)
+            if not (via_bot or authed(self)): return send(self,401,{'success':False,'msg':'نیاز به ورود یا API key دارید'})
+            if not via_bot and not has_permission(self,'clients_create'): return send(self,403,{'success':False,'msg':'دسترسی ساخت کانفیگ برای این پنل فعال نیست'})
             try:
                 d=body(self); name=str(d.get('name','')).strip(); gb=float(d.get('gb',0)); days=int(d.get('days',0))
                 protocol=str(d.get('protocol','vless')).lower(); transport=str(d.get('transport','ws')).lower()
@@ -1669,41 +1691,55 @@ class H(BaseHTTPRequestHandler):
             except Exception:
                 return send(self,400,{'success':False,'msg':'نام، حجم، مدت یا پروتکل نامعتبر است'})
             now=int(time.time()); sub_id=secrets.token_urlsafe(18); cuuid=str(uuid.uuid4()); dns_token=secrets.token_urlsafe(24) if protocol=='dns' else ''
-            c=db(); c.execute('INSERT INTO clients(name,uuid,sub_id,gb,days,created_at,expiry_at,protocol,transport,dns_server,wg_private_key,wg_address,dns_token,panel_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0)',(name,cuuid,sub_id,gb,days,now,now+days*86400,protocol,transport,'internal' if protocol=='dns' else settings().get('dns_server',''),'','10.66.0.2/32',dns_token))
+            scope=None if via_bot else panel_scope(self)
+            owner_panel=int(scope or 0)
+            c=db(); c.execute('INSERT INTO clients(name,uuid,sub_id,gb,days,created_at,expiry_at,protocol,transport,dns_server,wg_private_key,wg_address,dns_token,panel_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(name,cuuid,sub_id,gb,days,now,now+days*86400,protocol,transport,'internal' if protocol=='dns' else settings().get('dns_server',''),'','10.66.0.2/32',dns_token,owner_panel))
             cid=c.execute('SELECT last_insert_rowid()').fetchone()[0]; c.commit(); row=c.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone(); c.close(); restart_xray()
             return send(self,201,{'success':True,'client':client_data(self,row,settings())})
         if p.startswith('/api/clients/') and p.endswith('/renew'):
-            if not (bot_api_authed(self) or authed(self)): return send(self,401,{'success':False,'msg':'نیاز به ورود یا API key دارید'})
+            via_bot=bot_api_authed(self)
+            if not (via_bot or authed(self)): return send(self,401,{'success':False,'msg':'نیاز به ورود یا API key دارید'})
+            if not via_bot and not has_permission(self,'clients_edit'): return send(self,403,{'success':False,'msg':'دسترسی این عملیات برای این پنل فعال نیست'})
             try: cid=int(p.split('/')[3]); d=body(self); days=int(d.get('days',0))
             except: return send(self,400,{'success':False,'msg':'درخواست نامعتبر'})
             if days<=0 or days>3650:return send(self,400,{'success':False,'msg':'تعداد روز نامعتبر است'})
-            c=db(); r=c.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone()
+            scope=None if via_bot else panel_scope(self)
+            c=db(); r=c.execute('SELECT * FROM clients WHERE id=?'+(' AND panel_id=?' if scope is not None else ''),(cid,scope) if scope is not None else (cid,)).fetchone()
             if not r:c.close(); return send(self,404,{'success':False,'msg':'کلاینت پیدا نشد'})
             newexp=max(int(r['expiry_at']),int(time.time()))+days*86400
             c.execute('UPDATE clients SET expiry_at=?,enabled=1,days=days+? WHERE id=?',(newexp,days,cid)); c.commit(); row=c.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone(); c.close(); restart_xray()
             return send(self,200,{'success':True,'client':client_data(self,row,settings())})
         if p.startswith('/api/clients/') and p.endswith('/volume'):
-            if not (bot_api_authed(self) or authed(self)): return send(self,401,{'success':False,'msg':'نیاز به ورود یا API key دارید'})
+            via_bot=bot_api_authed(self)
+            if not (via_bot or authed(self)): return send(self,401,{'success':False,'msg':'نیاز به ورود یا API key دارید'})
+            if not via_bot and not has_permission(self,'clients_edit'): return send(self,403,{'success':False,'msg':'دسترسی این عملیات برای این پنل فعال نیست'})
             try: cid=int(p.split('/')[3]); d=body(self); gb=float(d.get('gb',0))
             except: return send(self,400,{'success':False,'msg':'درخواست نامعتبر'})
             if gb<=0 or gb>100000:return send(self,400,{'success':False,'msg':'حجم نامعتبر است'})
-            c=db(); r=c.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone()
+            scope=None if via_bot else panel_scope(self)
+            c=db(); r=c.execute('SELECT * FROM clients WHERE id=?'+(' AND panel_id=?' if scope is not None else ''),(cid,scope) if scope is not None else (cid,)).fetchone()
             if not r:c.close(); return send(self,404,{'success':False,'msg':'کلاینت پیدا نشد'})
             c.execute('UPDATE clients SET gb=gb+? WHERE id=?',(gb,cid)); c.commit(); row=c.execute('SELECT * FROM clients WHERE id=?',(cid,)).fetchone(); c.close()
             return send(self,200,{'success':True,'client':client_data(self,row,settings())})
         if p.startswith('/api/clients/') and p.endswith('/toggle'):
-            if not (bot_api_authed(self) or authed(self)): return send(self,401,{'success':False,'msg':'نیاز به ورود یا API key دارید'})
+            via_bot=bot_api_authed(self)
+            if not (via_bot or authed(self)): return send(self,401,{'success':False,'msg':'نیاز به ورود یا API key دارید'})
+            if not via_bot and not has_permission(self,'clients_edit'): return send(self,403,{'success':False,'msg':'دسترسی این عملیات برای این پنل فعال نیست'})
             try: cid=int(p.split('/')[3])
             except: return send(self,400,{'success':False,'msg':'شناسه نامعتبر است'})
-            c=db(); r=c.execute('SELECT enabled FROM clients WHERE id=?',(cid,)).fetchone()
+            scope=None if via_bot else panel_scope(self)
+            c=db(); r=c.execute('SELECT enabled FROM clients WHERE id=?'+(' AND panel_id=?' if scope is not None else ''),(cid,scope) if scope is not None else (cid,)).fetchone()
             if not r:c.close(); return send(self,404,{'success':False,'msg':'کلاینت پیدا نشد'})
             new=0 if r['enabled'] else 1; c.execute('UPDATE clients SET enabled=? WHERE id=?',(new,cid)); c.commit(); c.close(); restart_xray()
             return send(self,200,{'success':True,'enabled':bool(new)})
         if p.startswith('/api/clients/') and p.endswith('/delete'):
-            if not (bot_api_authed(self) or authed(self)): return send(self,401,{'success':False,'msg':'نیاز به ورود یا API key دارید'})
+            via_bot=bot_api_authed(self)
+            if not (via_bot or authed(self)): return send(self,401,{'success':False,'msg':'نیاز به ورود یا API key دارید'})
+            if not via_bot and not has_permission(self,'clients_delete'): return send(self,403,{'success':False,'msg':'دسترسی این عملیات برای این پنل فعال نیست'})
             try: cid=int(p.split('/')[3])
             except: return send(self,400,{'success':False,'msg':'شناسه نامعتبر است'})
-            c=db(); r=c.execute('SELECT id FROM clients WHERE id=?',(cid,)).fetchone()
+            scope=None if via_bot else panel_scope(self)
+            c=db(); r=c.execute('SELECT id FROM clients WHERE id=?'+(' AND panel_id=?' if scope is not None else ''),(cid,scope) if scope is not None else (cid,)).fetchone()
             if not r:c.close(); return send(self,404,{'success':False,'msg':'کلاینت پیدا نشد'})
             c.execute('DELETE FROM traffic WHERE client_id=?',(cid,)); c.execute('DELETE FROM clients WHERE id=?',(cid,)); c.commit(); c.close(); restart_xray()
             return send(self,200,{'success':True})
@@ -1716,6 +1752,36 @@ class H(BaseHTTPRequestHandler):
             try:
                 c.execute('UPDATE panel_users SET username=?,password_hash=? WHERE id=?',(nu,hash_password(np),u['id'])); c.commit(); c.close(); return send(self,200,{'success':True,'msg':'اطلاعات ورود تغییر کرد؛ دوباره وارد شوید'})
             except sqlite3.IntegrityError: c.close(); return send(self,409,{'success':False,'msg':'این نام کاربری قبلاً وجود دارد'})
+        if p.startswith('/api/admin/panels/') and p.endswith('/edit'):
+            if not is_admin(self): return send(self,403,{'success':False,'msg':'فقط ادمین دسترسی دارد'})
+            try:
+                pid=int(p.split('/')[4]); d=body(self)
+                name=str(d.get('name','')).strip(); username=str(d.get('username','')).strip()
+                password=str(d.get('password','')); allowed_ip=str(d.get('allowed_ip','')).strip()
+                perms=d.get('permissions') or {}
+                if len(name)<2 or len(name)>80 or len(username)<3 or (password and len(password)<4): raise ValueError
+                allowed={'clients_view','clients_create','clients_edit','clients_delete','configs_view','dns_view','settings_view'}
+                clean={k:bool(perms.get(k)) for k in allowed}
+            except Exception:
+                return send(self,400,{'success':False,'msg':'مشخصات پنل یا اطلاعات ورود نامعتبر است'})
+            c=db()
+            owner=c.execute('SELECT id FROM panel_users WHERE panel_id=? ORDER BY id LIMIT 1',(pid,)).fetchone()
+            exists=c.execute('SELECT id FROM child_panels WHERE id=?',(pid,)).fetchone()
+            if not owner or not exists:
+                c.close(); return send(self,404,{'success':False,'msg':'پنل یا اکانت مدیر آن پیدا نشد'})
+            try:
+                c.execute('UPDATE child_panels SET name=?,allowed_ip=?,permissions_json=? WHERE id=?',
+                          (name,allowed_ip,json.dumps(clean,ensure_ascii=False),pid))
+                if password:
+                    c.execute('UPDATE panel_users SET username=?,password_hash=? WHERE id=?',
+                              (username,hash_password(password),owner['id']))
+                else:
+                    c.execute('UPDATE panel_users SET username=? WHERE id=?',(username,owner['id']))
+                c.commit(); c.close()
+                return send(self,200,{'success':True,'msg':'مشخصات پنل و مدیر آن ذخیره شد'})
+            except sqlite3.IntegrityError:
+                c.rollback(); c.close()
+                return send(self,409,{'success':False,'msg':'این نام کاربری قبلاً استفاده شده است'})
         if p=='/api/admin/panels/create':
             if not is_admin(self): return send(self,403,{'success':False,'msg':'فقط ادمین دسترسی دارد'})
             try:
