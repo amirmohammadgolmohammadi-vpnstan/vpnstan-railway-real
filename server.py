@@ -16,7 +16,7 @@ XRAY_INBOUND_PORT=int(os.environ.get('XRAY_INBOUND_PORT','10000'))
 XRAY_VMESS_PORT=int(os.environ.get('XRAY_VMESS_PORT','10001'))
 DEFAULT_VMESS_PATH=os.environ.get('VPNSTAN_VMESS_PATH','/vmess')
 XRAY_API_ADDR=os.environ.get('XRAY_API_ADDR','127.0.0.1:10085')
-PANEL_VERSION='v26'
+PANEL_VERSION='v29'
 DNS_LISTEN_HOST=os.environ.get('VPNSTAN_DNS_LISTEN_HOST','127.0.0.1')
 DNS_LISTEN_PORT=int(os.environ.get('VPNSTAN_DNS_LISTEN_PORT','5353'))
 DNS_TCP_PORT=int(os.environ.get('VPNSTAN_DNS_TCP_PORT','5354'))
@@ -268,7 +268,10 @@ def collect_xray_stats():
         m=re.match(r'^user>>>(.+)>>>traffic>>>(uplink|downlink)$',name)
         if m:
             email,kind=m.group(1),m.group(2)
-            stats.setdefault(email,{'upload':0,'download':0})[kind]=value
+            # Xray names counters uplink/downlink; the panel stores them as
+            # upload/download. Map explicitly or every displayed usage stays 0.
+            field='upload' if kind=='uplink' else 'download'
+            stats.setdefault(email,{'upload':0,'download':0})[field]=value
     if not stats: return
     c=db(); now=int(time.time())
     rows=c.execute('SELECT id,uuid FROM clients').fetchall()

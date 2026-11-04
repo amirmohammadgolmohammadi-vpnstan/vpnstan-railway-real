@@ -1,4 +1,4 @@
-# VPNSTAN v28 — Bot Hub API
+# VPNSTAN v29 — Bot Hub API
 
 این نسخه API امن برای اتصال Bot Hub کلودفلر دارد.
 

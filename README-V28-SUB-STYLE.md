@@ -1,4 +1,4 @@
-# VPNSTAN v28 — Subscription UI
+# VPNSTAN v29 — Subscription UI
 
 این نسخه ظاهر صفحه عمومی ساب/کانفیگ را مطابق طرح ارسالی بازطراحی می‌کند.
 
