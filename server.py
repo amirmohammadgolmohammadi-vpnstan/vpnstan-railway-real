@@ -1131,9 +1131,50 @@ class H(BaseHTTPRequestHandler):
         if p=='/api/system':
             if not authed(self): return send(self,401,{'success':False,'msg':'نیاز به ورود دارید'})
             alive=bool(XRAY_PROC and XRAY_PROC.poll() is None)
+            # Read Linux /proc and filesystem stats without optional dependencies.
+            ram={'total':0,'used':0,'percent':0}; swap={'total':0,'used':0,'percent':0}
+            try:
+                mem={}
+                with open('/proc/meminfo','r') as f:
+                    for line in f:
+                        k,v=line.split(':',1); mem[k]=int(v.strip().split()[0])*1024
+                ram['total']=mem.get('MemTotal',0); ram['used']=max(0,ram['total']-mem.get('MemAvailable',mem.get('MemFree',0)))
+                ram['percent']=round(100*ram['used']/ram['total'],1) if ram['total'] else 0
+                swap['total']=mem.get('SwapTotal',0); swap['used']=max(0,swap['total']-mem.get('SwapFree',0))
+                swap['percent']=round(100*swap['used']/swap['total'],1) if swap['total'] else 0
+            except Exception: pass
+            try:
+                du=os.statvfs('/')
+                disk_total=du.f_blocks*du.f_frsize; disk_free=du.f_bavail*du.f_frsize; disk_used=max(0,disk_total-disk_free)
+                disk={'total':disk_total,'used':disk_used,'percent':round(100*disk_used/disk_total,1) if disk_total else 0}
+            except Exception: disk={'total':0,'used':0,'percent':0}
+            try:
+                with open('/proc/stat','r') as f: vals=list(map(int,f.readline().split()[1:]))
+                idle=vals[3]+(vals[4] if len(vals)>4 else 0); total=sum(vals)
+                time.sleep(0.08)
+                with open('/proc/stat','r') as f: vals2=list(map(int,f.readline().split()[1:]))
+                idle2=vals2[3]+(vals2[4] if len(vals2)>4 else 0); total2=sum(vals2)
+                cpu=round(100*(1-(idle2-idle)/max(1,total2-total)),1)
+            except Exception: cpu=0
+            try:
+                with open('/proc/uptime','r') as f: uptime=float(f.read().split()[0])
+            except Exception: uptime=0
+            try: load=os.getloadavg()
+            except Exception: load=(0,0,0)
+            try:
+                with open('/proc/net/dev','r') as f: lines=f.readlines()[2:]
+                rx=tx=0
+                for line in lines:
+                    iface,data=line.split(':',1); iface=iface.strip()
+                    if iface=='lo': continue
+                    nums=list(map(int,data.split())); rx+=nums[0]; tx+=nums[8]
+                download,upload=rx,tx
+            except Exception: download=upload=0
             try: log=open('/opt/vpnstan/data/xray.log','rb').read()[-6000:].decode('utf-8','replace')
             except: log=''
-            return send(self,200,{'success':True,'xray':alive,'port':int(os.environ.get('PORT','8080')),'inboundPort':XRAY_INBOUND_PORT,'log':log})
+            try: ip=urllib.request.urlopen('https://api.ipify.org',timeout=2).read().decode().strip()
+            except Exception: ip=''
+            return send(self,200,{'success':True,'xray':alive,'port':int(os.environ.get('PORT','8080')),'inboundPort':XRAY_INBOUND_PORT,'log':log,'ram':ram,'swap':swap,'disk':disk,'cpu':cpu,'cores':os.cpu_count() or 1,'uptime':uptime,'load':{'one':load[0],'five':load[1],'fifteen':load[2]},'download':download,'upload':upload,'ipv4':ip})
         return self.static()
     def do_POST(self):
         p=urllib.parse.urlparse(self.path).path
